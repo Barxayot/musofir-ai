@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Musofir AI</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    :root {
+      --surface:  rgba(15, 23, 42, 0.88);
+      --surface2: rgba(30, 41, 59, 0.92);
+      --text:   #e2e8f0;
+      --muted:  #94a3b8;
+      --accent: #38bdf8;
+      --green:  #22c55e;
+      --border: rgba(148, 163, 184, 0.14);
+    }
+
+    html, body { height: 100%; overflow: hidden; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background:
+        radial-gradient(ellipse 90% 40% at 50% 0%, rgba(56,189,248,0.14) 0%, transparent 65%),
+        linear-gradient(160deg, #050d1f 0%, #060d1a 100%);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .screen { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    .hidden { display: none !important; }
+
+    /* ========== PROFILE SCREEN ========== */
+    .p-shell {
+      flex: 1; overflow-y: auto; overscroll-behavior: contain;
+      padding: 14px; display: flex; flex-direction: column; gap: 12px;
+    }
+
+    .brand { text-align: center; padding: 10px 0 4px; }
+
+    .brand-logo {
+      font-size: 26px; font-weight: 800; letter-spacing: -0.5px;
+      background: linear-gradient(110deg, var(--accent), var(--green));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .brand-tag { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+    .step-bar { display: flex; gap: 5px; justify-content: center; }
+
+    .sdot {
+      height: 4px; border-radius: 2px; background: var(--border);
+      transition: all 0.3s ease; flex: 1; max-width: 36px;
+    }
+    .sdot.done   { background: var(--accent); }
+    .sdot.active { background: rgba(56,189,248,0.5); }
+
+    .step-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 22px; padding: 22px 18px 18px;
+      backdrop-filter: blur(16px); flex: 1;
+    }
+
+    .step-meta {
+      font-size: 11px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.1em; margin-bottom: 8px;
+    }
+
+    .step-q { font-size: 19px; font-weight: 700; line-height: 1.3; margin-bottom: 20px; }
+
+    .opt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .opt-grid.c1 { grid-template-columns: 1fr; }
+
+    .opt-btn {
+      background: var(--surface2); border: 1.5px solid var(--border);
+      color: var(--text); border-radius: 15px; padding: 13px 10px;
+      cursor: pointer; text-align: center; font-size: 13px; font-weight: 500;
+      font-family: inherit; transition: border-color .15s, background .15s, transform .1s;
+      display: flex; flex-direction: column; align-items: center; gap: 5px; user-select: none;
+    }
+    .opt-icon { font-size: 22px; }
+    .opt-btn:hover { border-color: rgba(56,189,248,.4); }
+    .opt-btn.sel {
+      border-color: var(--accent); background: rgba(56,189,248,0.13); transform: scale(0.98);
+    }
+
+    .date-inp {
+      width: 100%; background: var(--surface2); border: 1.5px solid var(--border);
+      color: var(--text); border-radius: 15px; padding: 15px 16px;
+      font-size: 15px; font-family: inherit; color-scheme: dark;
+    }
+    .date-inp:focus { outline: none; border-color: var(--accent); }
+
+    .nav-row { display: flex; gap: 10px; margin-top: 18px; }
+
+    .btn-back {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--muted); border-radius: 14px; padding: 14px 18px;
+      cursor: pointer; font-size: 14px; font-family: inherit;
+    }
+
+    .btn-next {
+      flex: 1; background: linear-gradient(110deg, var(--accent), var(--green));
+      border: none; color: white; border-radius: 14px; padding: 14px;
+      cursor: pointer; font-size: 15px; font-weight: 600; font-family: inherit;
+    }
+    .btn-next:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* ========== CHAT SCREEN ========== */
+    .c-shell {
+      flex: 1; display: flex; flex-direction: column;
+      min-height: 0; padding: 10px 10px 0; gap: 8px; overflow: hidden;
+    }
+
+    .c-header {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 10px 12px;
+      display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0; backdrop-filter: blur(14px);
+    }
+
+    .c-avatar {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--green));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+
+    .c-head-text { flex: 1; min-width: 0; }
+    .c-name  { font-weight: 700; font-size: 14px; }
+    .c-sub   {
+      font-size: 11px; color: var(--muted); margin-top: 1px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    .c-edit {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--muted); border-radius: 10px; padding: 5px 10px;
+      font-size: 11px; cursor: pointer; flex-shrink: 0; font-family: inherit;
+    }
+
+    .c-msgs {
+      flex: 1; overflow-y: auto; overscroll-behavior: contain;
+      display: flex; flex-direction: column; gap: 8px; padding: 2px 0 4px;
+    }
+
+    .msg { display: flex; animation: msgIn .22s ease; }
+
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg.user      { justify-content: flex-end; }
+    .msg.assistant { justify-content: flex-start; }
+
+    .bubble {
+      max-width: 80%; padding: 10px 14px; border-radius: 18px;
+      font-size: 14px; line-height: 1.55; word-break: break-word; white-space: pre-wrap;
+    }
+
+    .msg.user .bubble {
+      background: linear-gradient(135deg, #0ea5e9, #0284c7);
+      color: white; border-bottom-right-radius: 5px;
+    }
+
+    .msg.assistant .bubble {
+      background: var(--surface); border: 1px solid var(--border);
+      border-bottom-left-radius: 5px;
+    }
+
+    .att-tag {
+      font-size: 11px; color: rgba(255,255,255,.75);
+      background: rgba(255,255,255,.12); border-radius: 7px;
+      padding: 2px 7px; margin-bottom: 5px; display: inline-block;
+    }
+
+    .dots { display: flex; gap: 5px; align-items: center; }
+    .dots span {
+      width: 7px; height: 7px; background: var(--muted); border-radius: 50%;
+      animation: blink 1.4s infinite;
+    }
+    .dots span:nth-child(2) { animation-delay: .2s; }
+    .dots span:nth-child(3) { animation-delay: .4s; }
+
+    @keyframes blink {
+      0%,80%,100% { opacity: .25; transform: scale(.85); }
+      40%          { opacity: 1;   transform: scale(1); }
+    }
+
+    .empty {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; gap: 14px; padding: 20px;
+    }
+
+    .empty-ico  { font-size: 44px; opacity: .45; }
+    .empty-hint { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+    .quick-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+    .qbtn {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); border-radius: 999px; padding: 7px 13px;
+      font-size: 12px; cursor: pointer; font-family: inherit;
+    }
+    .qbtn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .att-bar {
+      display: none; background: rgba(56,189,248,.08);
+      border: 1px solid rgba(56,189,248,.22); border-radius: 12px;
+      padding: 8px 12px; font-size: 12px; color: var(--accent);
+      align-items: center; gap: 8px; flex-shrink: 0;
+    }
+    .att-bar.show { display: flex; }
+    .att-bar span { flex: 1; }
+
+    .att-rm {
+      background: none; border: none; color: var(--muted);
+      cursor: pointer; font-size: 15px; padding: 0; line-height: 1;
+    }
+
+    .err-bar {
+      flex-shrink: 0; background: rgba(239,68,68,.12);
+      border: 1px solid rgba(239,68,68,.25); color: #fca5a5;
+      border-radius: 10px; padding: 7px 12px; font-size: 12px;
+    }
+
+    .c-inp {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 8px 8px 8px 10px;
+      display: flex; gap: 6px; align-items: flex-end;
+      flex-shrink: 0; margin-bottom: 10px; backdrop-filter: blur(14px);
+    }
+
+    .file-btn {
+      background: none; border: none; color: var(--muted);
+      font-size: 20px; cursor: pointer; padding: 6px;
+      display: flex; align-items: center; flex-shrink: 0; line-height: 1;
+    }
+    .file-btn:hover { color: var(--accent); }
+
+    .c-ta {
+      flex: 1; background: none; border: none; color: var(--text);
+      font-size: 14px; font-family: inherit; resize: none;
+      max-height: 100px; padding: 6px 0; line-height: 1.45;
+    }
+    .c-ta:focus { outline: none; }
+    .c-ta::placeholder { color: var(--muted); }
+
+    .send-btn {
+      background: linear-gradient(135deg, var(--accent), var(--green));
+      border: none; border-radius: 12px; width: 36px; height: 36px;
+      color: white; font-size: 15px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: opacity .2s;
+    }
+    .send-btn:disabled { opacity: .35; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+<!-- ============ PROFILE SCREEN ============ -->
+<div id="pScreen" class="screen">
+  <div class="p-shell">
+    <div class="brand">
+      <div class="brand-logo">MUSOFIR AI</div>
+      <div class="brand-tag">Shaxsiy migratsiya yordamchisi</div>
+    </div>
+    <div class="step-bar" id="stepBar"></div>
+    <div class="step-card" id="stepCard"></div>
+  </div>
+</div>
+
+<!-- ============ CHAT SCREEN ============ -->
+<div id="cScreen" class="screen hidden">
+  <div class="c-shell">
+
+    <div class="c-header">
+      <div class="c-avatar">🌍</div>
+      <div class="c-head-text">
+        <div class="c-name">MUSOFIR AI</div>
+        <div class="c-sub" id="profSub">—</div>
+      </div>
+      <button class="c-edit" id="editBtn">✏️ Profil</button>
+    </div>
+
+    <div class="c-msgs" id="msgs">
+      <div class="empty" id="emptyEl">
+        <div class="empty-ico">🗺️</div>
+        <div class="empty-hint">Savolingizni yozing yoki tezkor savol tanlang</div>
+        <div class="quick-row">
+          <button class="qbtn" data-q="Menga keyingi muhim qadamni ayt">📋 Keyingi qadam</button>
+          <button class="qbtn" data-q="Qanday hujjatlar kerak?">📄 Hujjatlar</button>
+          <button class="qbtn" data-q="Xavflar va jarimalari haqida tushuntir">⚠️ Xavflar</button>
+          <button class="qbtn" data-q="Ro'yxatdan o'tish tartibi qanday?">🏛️ Ro'yxat</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="att-bar" id="attBar">
+      <span id="attName">📎</span>
+      <button class="att-rm" id="rmAtt">✕</button>
+    </div>
+
+    <div id="errBox"></div>
+
+    <div class="c-inp">
+      <button class="file-btn" id="fileBtn">📎</button>
+      <input type="file" id="fileIn" accept="image/*,application/pdf" style="display:none">
+      <textarea class="c-ta" id="msgIn" placeholder="Savolingizni yozing..." maxlength="2000" rows="1"></textarea>
+      <button class="send-btn" id="sendBtn">➤</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API  = "https://musofir-bot.barxayotjonaliqulov.workers.dev";
+const PKEY = "musofir_ai_profile_v2";
+const CKEY = "musofir_ai_chat_id";
+
+// ----------------------------------------------------------------
+// PROFILE STEPS
+// ----------------------------------------------------------------
+const STEPS = [
+  {
+    id: "country", meta: "1 / 6 · Manzil", q: "Qaysi mamlakatga ketmoqchisiz?",
+    opts: [
+      { v: "russia",     l: "Rossiya",     e: "🇷🇺" },
+      { v: "kazakhstan", l: "Qozog'iston", e: "🇰🇿" },
+      { v: "turkey",     l: "Turkiya",     e: "🇹🇷" },
+      { v: "korea",      l: "Koreya",      e: "🇰🇷" },
+      { v: "uae",        l: "BAA / Dubai", e: "🇦🇪" },
+      { v: "germany",    l: "Germaniya",   e: "🇩🇪" },
+      { v: "poland",     l: "Polsha",      e: "🇵🇱" },
+      { v: "other",      l: "Boshqa",      e: "🌍" },
+    ],
+  },
+  {
+    id: "profession", meta: "2 / 6 · Kasb", q: "Kasb-hunaringiz nima?",
+    opts: [
+      { v: "construction", l: "Qurilish",    e: "🏗️" },
+      { v: "driver",       l: "Haydovchi",   e: "🚗" },
+      { v: "cook",         l: "Oshpaz",      e: "👨‍🍳" },
+      { v: "trade",        l: "Savdo",       e: "🛍️" },
+      { v: "it",           l: "IT / Texno",  e: "💻" },
+      { v: "medical",      l: "Tibbiyot",    e: "⚕️" },
+      { v: "education",    l: "Ta'lim",      e: "📚" },
+      { v: "other",        l: "Boshqa",      e: "💼" },
+    ],
+  },
+  {
+    id: "departureDate", meta: "3 / 6 · Sana", q: "Qachon ketmoqchisiz?", type: "date",
+  },
+  {
+    id: "isFirstTrip", meta: "4 / 6 · Tajriba", q: "Bu mamlakat sizga birinchi safar bo'ladimi?",
+    cols: 1,
+    opts: [
+      { v: "yes", l: "Ha, birinchi marta",     e: "🌱" },
+      { v: "no",  l: "Yo'q, avval bo'lganman", e: "✈️" },
+    ],
+  },
+  {
+    id: "language", meta: "5 / 6 · Til", q: "Qaysi tilda muloqot qilasiz?",
+    cols: 1,
+    opts: [
+      { v: "uz", l: "O'zbekcha", e: "🇺🇿" },
+      { v: "ru", l: "Русский",   e: "🇷🇺" },
+      { v: "en", l: "English",   e: "🇺🇸" },
+    ],
+  },
+  {
+    id: "hasContract", meta: "6 / 6 · Shartnoma", q: "Ish shartnomangiz bormi?",
+    cols: 1,
+    opts: [
+      { v: "yes", l: "Ha, bor",          e: "📝" },
+      { v: "no",  l: "Yo'q, hali yo'q",  e: "❓" },
+    ],
+  },
+];
+
+// ----------------------------------------------------------------
+// STATE
+// ----------------------------------------------------------------
+let stepIdx   = 0;
+let prof      = {};
+let chatId    = Number(localStorage.getItem(CKEY)) || 0;
+let history   = [];
+let busy      = false;
+let pendFile  = null;
+let chatReady = false;
+let justCreated = false; // profil yangi yaratilganda true — eski tarixdan qat'iy nazar autoGreet chaqiradi
+
+// ----------------------------------------------------------------
+// BOOT
+// ----------------------------------------------------------------
+window.addEventListener("DOMContentLoaded", () => {
+  try { prof = JSON.parse(localStorage.getItem(PKEY) || "{}"); } catch {}
+  if (prof.country && prof.profession && prof.departureDate) gotoChat();
+  else gotoProfile();
+});
+
+// ----------------------------------------------------------------
+// PROFILE SCREEN
+// ----------------------------------------------------------------
+function gotoProfile() {
+  show("pScreen"); hide("cScreen");
+  drawStep();
+}
+
+function drawBar() {
+  document.getElementById("stepBar").innerHTML = STEPS.map((_, i) => {
+    const c = i < stepIdx ? "sdot done" : i === stepIdx ? "sdot active" : "sdot";
+    return `<div class="${c}"></div>`;
+  }).join("");
+}
+
+function drawStep() {
+  drawBar();
+  const s = STEPS[stepIdx];
+  let body = "";
+
+  if (s.type === "date") {
+    const today = new Date().toISOString().slice(0, 10);
+    const maxD  = new Date(Date.now() + 545 * 86400e3).toISOString().slice(0, 10);
+    body = `<input type="date" class="date-inp" id="dateV"
+      value="${prof[s.id] || ""}" min="${today}" max="${maxD}"
+      oninput="prof['${s.id}']=this.value; chk()">`;
+  } else {
+    const cls = s.cols === 1 ? "opt-grid c1" : "opt-grid";
+    body = `<div class="${cls}">${s.opts.map(o => `
+      <button class="opt-btn ${prof[s.id] === o.v ? "sel" : ""}"
+              onclick="pick('${s.id}','${o.v}','${o.l}',this)">
+        <span class="opt-icon">${o.e}</span><span>${o.l}</span>
+      </button>`).join("")}</div>`;
+  }
+
+  document.getElementById("stepCard").innerHTML = `
+    <div class="step-meta">${s.meta}</div>
+    <div class="step-q">${s.q}</div>
+    ${body}
+    <div class="nav-row">
+      ${stepIdx > 0 ? `<button class="btn-back" onclick="goBack()">← Orqaga</button>` : ""}
+      <button class="btn-next" id="nxtBtn" onclick="goNext()">
+        ${stepIdx === STEPS.length - 1 ? "Boshlash ✓" : "Davom etish →"}
+      </button>
+    </div>`;
+  chk();
+}
+
+function pick(id, val, label, el) {
+  prof[id] = val;
+  prof[id + "Label"] = label;
+  el.closest(".opt-grid").querySelectorAll(".opt-btn").forEach(b => b.classList.remove("sel"));
+  el.classList.add("sel");
+  chk();
+  setTimeout(goNext, 270);
+}
+
+function chk() {
+  const btn = document.getElementById("nxtBtn");
+  if (btn) btn.disabled = !prof[STEPS[stepIdx].id];
+}
+
+function goNext() {
+  if (!prof[STEPS[stepIdx].id]) return;
+  if (stepIdx < STEPS.length - 1) { stepIdx++; drawStep(); }
+  else { localStorage.setItem(PKEY, JSON.stringify(prof)); justCreated = true; gotoChat(); }
+}
+
+function goBack() {
+  if (stepIdx > 0) { stepIdx--; drawStep(); }
+}
+
+// ----------------------------------------------------------------
+// CHAT SCREEN
+// ----------------------------------------------------------------
+function gotoChat() {
+  show("cScreen"); hide("pScreen");
+  updateSub();
+  setupListeners();
+  initTG();
+}
+
+function updateSub() {
+  const parts = [prof.countryLabel, prof.professionLabel].filter(Boolean);
+  if (prof.departureDate) {
+    const d = new Date(prof.departureDate);
+    parts.push(d.toLocaleDateString("uz-UZ", { day: "numeric", month: "short", year: "numeric" }));
+  }
+  document.getElementById("profSub").textContent = parts.join(" · ") || "Profil to'ldirilmagan";
+}
+
+function setupListeners() {
+  if (chatReady) return;
+  chatReady = true;
+
+  document.getElementById("editBtn").onclick = () => { stepIdx = 0; gotoProfile(); };
+
+  const ta = document.getElementById("msgIn");
+  ta.addEventListener("input", () => {
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 100) + "px";
+  });
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSend(); }
+  });
+
+  document.getElementById("sendBtn").onclick = doSend;
+  document.getElementById("fileBtn").onclick  = () => document.getElementById("fileIn").click();
+  document.getElementById("fileIn").addEventListener("change", onFile);
+  document.getElementById("rmAtt").onclick    = clearAtt;
+
+  document.querySelectorAll(".qbtn").forEach(b => {
+    b.onclick = () => { document.getElementById("msgIn").value = b.dataset.q; doSend(); };
+  });
+}
+
+// ---- File ----
+async function onFile(e) {
+  const f = e.target.files[0];
+  if (!f) return;
+  if (f.size > 4 * 1024 * 1024) { showErr("Fayl hajmi 4 MB dan oshmasligi kerak."); e.target.value = ""; return; }
+
+  if (f.type.startsWith("image/")) {
+    const b64 = await toB64(f);
+    pendFile = { name: f.name, b64, mime: f.type };
+    document.getElementById("attName").textContent = "🖼️ " + f.name;
+  } else {
+    pendFile = { name: f.name, b64: null, mime: "application/pdf" };
+    document.getElementById("attName").textContent = "📄 " + f.name;
+  }
+  document.getElementById("attBar").classList.add("show");
+  e.target.value = "";
+}
+
+function clearAtt() { pendFile = null; document.getElementById("attBar").classList.remove("show"); }
+
+function toB64(file) {
+  return new Promise((ok, fail) => {
+    const r = new FileReader();
+    r.onload  = () => ok(r.result.split(",")[1]);
+    r.onerror = fail;
+    r.readAsDataURL(file);
+  });
+}
+
+// ---- Telegram init ----
+function initTG() {
+  const tg  = window.Telegram?.WebApp;
+  const fid = ensureId();
+
+  if (!tg) { chatId = fid; afterInit(); return; }
+  tg.ready(); tg.expand();
+  if (!tg.initData) { chatId = fid; afterInit(); return; }
+
+  fetch(`${API}/webapp/init`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ initData: tg.initData, chat_id: fid }),
+  })
+    .then(r => r.json())
+    .then(d => {
+      chatId  = (d.ok && d.chat_id) ? d.chat_id : fid;
+      history = (d.ok && d.history)  ? d.history  : [];
+      localStorage.setItem(CKEY, String(chatId));
+      afterInit();
+    })
+    .catch(() => { chatId = fid; afterInit(); });
+}
+
+// yangi profil bo'lsa eski tarixni tozalab autoGreet chaqiradi
+function afterInit() {
+  if (justCreated) { history = []; justCreated = false; }
+  renderHist();
+  if (history.length === 0) autoGreet();
+}
+
+// Profil asosida birinchi AI tavsiyasini chaqiradi; foydalanuvchi xabari saqlanmaydi
+async function autoGreet() {
+  const loader = addLoader();
+  try {
+    const r = await fetch(`${API}/webapp/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: ensureId(),
+        message: "Mening profilim asosida shaxsiy migratsiya yo'riqnomamni boshla. Hozir nima qilishim kerak, muhim qadamlar va ehtibor berishim lozim bo'lgan xavflarni qisqa yoz.",
+        topic:   "musofir_ai",
+        profile: prof,
+        _auto:   true,
+      }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    loader.remove();
+    if (d.ok) {
+      addBubble("assistant", d.reply);
+      history.push({ role: "assistant", content: d.reply });
+    }
+  } catch (e) {
+    loader.remove();
+    console.error("autoGreet error:", e);
+  }
+}
+
+function ensureId() {
+  if (!chatId) {
+    chatId = 100000 + Math.floor(Math.random() * 900000);
+    localStorage.setItem(CKEY, String(chatId));
+  }
+  return chatId;
+}
+
+// ---- Render history ----
+function renderHist() {
+  const c = document.getElementById("msgs");
+  c.querySelectorAll(".msg").forEach(el => el.remove());
+  if (history.length === 0) { document.getElementById("emptyEl").style.display = ""; return; }
+  document.getElementById("emptyEl").style.display = "none";
+  history.forEach(m => addBubble(m.role, m.content));
+  document.getElementById("msgIn").focus();
+}
+
+function addBubble(role, text, attLabel) {
+  document.getElementById("emptyEl").style.display = "none";
+  const wrap = document.createElement("div");
+  wrap.className = `msg ${role}`;
+  const bub = document.createElement("div");
+  bub.className = "bubble";
+  if (attLabel) {
+    const tag = document.createElement("div");
+    tag.className = "att-tag";
+    tag.textContent = attLabel;
+    bub.appendChild(tag);
+    const br = document.createElement("br");
+    bub.appendChild(br);
+  }
+  bub.appendChild(document.createTextNode(text));
+  wrap.appendChild(bub);
+  const c = document.getElementById("msgs");
+  c.appendChild(wrap);
+  c.scrollTop = c.scrollHeight;
+}
+
+function addLoader() {
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant";
+  wrap.id = "loader";
+  const bub = document.createElement("div");
+  bub.className = "bubble";
+  bub.innerHTML = `<div class="dots"><span></span><span></span><span></span></div>`;
+  wrap.appendChild(bub);
+  const c = document.getElementById("msgs");
+  c.appendChild(wrap);
+  c.scrollTop = c.scrollHeight;
+  return wrap;
+}
+
+// ---- Send ----
+async function doSend() {
+  const ta   = document.getElementById("msgIn");
+  const text = ta.value.trim();
+  if (!text || busy) return;
+
+  busy = true;
+  document.getElementById("sendBtn").disabled = true;
+  document.getElementById("errBox").innerHTML = "";
+
+  const attLabel = pendFile ? ((pendFile.b64 ? "🖼️ " : "📄 ") + pendFile.name) : null;
+  addBubble("user", text, attLabel);
+  const loader = addLoader();
+
+  ta.value = "";
+  ta.style.height = "auto";
+
+  const body = {
+    chat_id: ensureId(),
+    message: text,
+    topic:   "musofir_ai",
+    profile: prof,
+    ...(pendFile?.b64 ? { image_base64: pendFile.b64, image_type: pendFile.mime } : {}),
+    ...(pendFile && !pendFile.b64 ? { document_name: pendFile.name } : {}),
+  };
+
+  clearAtt();
+
+  try {
+    const r = await fetch(`${API}/webapp/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    loader.remove();
+    if (!d.ok) { showErr("Xabar yuborilmadi: " + (d.error || "xato")); return; }
+    addBubble("assistant", d.reply);
+    history.push({ role: "user", content: text });
+    history.push({ role: "assistant", content: d.reply });
+  } catch (e) {
+    loader.remove();
+    showErr("Xato: " + e.message);
+  } finally {
+    busy = false;
+    document.getElementById("sendBtn").disabled = false;
+    document.getElementById("msgIn").focus();
+  }
+}
+
+function showErr(msg) {
+  const el = document.getElementById("errBox");
+  el.innerHTML = `<div class="err-bar">⚠️ ${msg}</div>`;
+  setTimeout(() => { el.innerHTML = ""; }, 5000);
+}
+
+function show(id) { document.getElementById(id).classList.remove("hidden"); }
+function hide(id) { document.getElementById(id).classList.add("hidden"); }
+</script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+# Mahalliy muhit
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.claude/
+.wrangler/
+
+# Mini appga kerak bo'lmagan kanallar
+channels/
+core/
+
+# Ma'lumotlar — git ga kirmasin
+_ig_*.json
+_ig_*.txt
+_tg_*.json
+_tmp_*
+result.json
+*.rar
+*.zip
+
+# Maxfiy skriptlar
+backfill_telegram_ai.ps1
+retry_business_send.ps1
+
+# Bilim bazasi (tijoriy kontent)
+musofir_knowledge_base*.md
+
+# DB setup skriptlari
+*.sql
+
+# Python skriptlari
+*.py
