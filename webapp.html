@@ -527,14 +527,10 @@ async function onFile(e) {
   if (!f) return;
   if (f.size > 4 * 1024 * 1024) { showErr("Fayl hajmi 4 MB dan oshmasligi kerak."); e.target.value = ""; return; }
 
-  if (f.type.startsWith("image/")) {
-    const b64 = await toB64(f);
-    pendFile = { name: f.name, b64, mime: f.type };
-    document.getElementById("attName").textContent = "🖼️ " + f.name;
-  } else {
-    pendFile = { name: f.name, b64: null, mime: "application/pdf" };
-    document.getElementById("attName").textContent = "📄 " + f.name;
-  }
+  const isImage = f.type.startsWith("image/");
+  const b64 = await toB64(f);
+  pendFile = { name: f.name, b64, mime: isImage ? f.type : (f.type || "application/pdf") };
+  document.getElementById("attName").textContent = isImage ? "🖼️ " + f.name : "📄 " + f.name;
   document.getElementById("attBar").classList.add("show");
   e.target.value = "";
 }
@@ -672,7 +668,7 @@ async function doSend() {
   document.getElementById("sendBtn").disabled = true;
   document.getElementById("errBox").innerHTML = "";
 
-  const attLabel = pendFile ? ((pendFile.b64 ? "🖼️ " : "📄 ") + pendFile.name) : null;
+  const attLabel = pendFile ? ((pendFile.mime.startsWith("image/") ? "🖼️ " : "📄 ") + pendFile.name) : null;
   addBubble("user", text, attLabel);
   const loader = addLoader();
 
@@ -684,8 +680,8 @@ async function doSend() {
     message: text,
     topic:   "musofir_ai",
     profile: prof,
-    ...(pendFile?.b64 ? { image_base64: pendFile.b64, image_type: pendFile.mime } : {}),
-    ...(pendFile && !pendFile.b64 ? { document_name: pendFile.name } : {}),
+    ...(pendFile?.b64 && pendFile.mime.startsWith("image/") ? { image_base64: pendFile.b64, image_type: pendFile.mime } : {}),
+    ...(pendFile ? { document_name: pendFile.name, document_base64: pendFile.b64 || null, document_mime: pendFile.mime || "application/pdf" } : {}),
   };
 
   clearAtt();

@@ -27,6 +27,7 @@ let OPENAI_API_KEY     = "";
 let ANTHROPIC_API_KEY  = "";
 let SUPABASE_URL       = "";
 let SUPABASE_KEY       = "";
+let OCR_SPACE_API_KEY  = "";
 const OPERATOR_CHAT_IDS = [974817901, 752717259, 5807355313];
 const OPERATOR_CHAT_ID  = OPERATOR_CHAT_IDS[0];
 const OPERATOR_IDS_FILTER = OPERATOR_CHAT_IDS.join(",");
@@ -57,10 +58,321 @@ function applyRuntimeConfig(env) {
   WA_RUNTIME.verifyToken  = env.WHATSAPP_VERIFY_TOKEN  || WA_RUNTIME.verifyToken;
   WA_RUNTIME.token        = env.WHATSAPP_TOKEN         || WA_RUNTIME.token;
   WA_RUNTIME.phoneNumberId = env.WHATSAPP_PHONE_NUMBER_ID || WA_RUNTIME.phoneNumberId;
+  // OCR.space API key (optional) for OCR fallback on PDFs/images
+  OCR_SPACE_API_KEY = env.OCR_SPACE_API_KEY || OCR_SPACE_API_KEY;
   // Instagram
   IG_RUNTIME.verifyToken = env.INSTAGRAM_VERIFY_TOKEN || IG_RUNTIME.verifyToken;
   IG_RUNTIME.token       = env.INSTAGRAM_TOKEN        || IG_RUNTIME.token;
   IG_RUNTIME.accountId   = env.INSTAGRAM_ACCOUNT_ID   || IG_RUNTIME.accountId;
+}
+
+function decodeBase64ToUint8Array(value) {
+  if (!value) return new Uint8Array();
+  const cleaned = String(value).replace(/^data:.*;base64,/, "").replace(/\s+/g, "");
+  const binary = atob(cleaned);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function decodePdfEscapeSequence(value) {
+  let result = "";
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch !== "\\") {
+      result += ch;
+      continue;
+    }
+    const next = value[i + 1];
+    if (!next) {
+      result += "\\";
+      continue;
+    }
+    if (["n", "r", "t", "b", "f", "(", ")", "\\"].includes(next)) {
+      const map = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
+      result += map[next] ?? next;
+      i += 1;
+      continue;
+    }
+    if (/^\d$/.test(next)) {
+      let oct = next;
+      let j = 1;
+      while (j < 3 && i + 1 + j < value.length && /^\d$/.test(value[i + 1 + j])) {
+        oct += value[i + 1 + j];
+        j += 1;
+      }
+      result += String.fromCharCode(parseInt(oct, 8));
+      i += j;
+      continue;
+    }
+    result += next;
+    i += 1;
+  }
+  return result;
+}
+
+function extractPdfTextFromBytes(bytes) {
+  if (!bytes || bytes.length === 0) return "";
+  const source = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  if (!source.includes("%PDF")) return "";
+
+  const textChunks = [];
+  const regex = /\((?:\\.|[^()\\])*\)\s*(?:Tj|TJ)/g;
+  for (const match of source.matchAll(regex)) {
+    const block = match[0];
+    const lastParen = block.lastIndexOf(")");
+    if (lastParen <= 0) continue;
+    const rawLiteral = block.slice(1, lastParen);
+    const decoded = decodePdfEscapeSequence(rawLiteral).replace(/\s+/g, " ").trim();
+    if (decoded.length < 2) continue;
+    if (/^[\d\s\-.,/()\\:;=]+$/.test(decoded)) continue;
+    textChunks.push(decoded);
+  }
+
+  if (textChunks.length > 0) {
+    return [...new Set(textChunks)].slice(0, 80).join("\n");
+  }
+
+  const simpleText = (source.match(/[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9\s.,:;!?()\-]{25,}/g) || [])
+    .map((s) => s.trim())
+    .filter((s) => s.length > 20);
+  return [...new Set(simpleText)].slice(0, 20).join(" \n");
+}
+
+function decodeXmlEntities(value) {
+  return String(value || "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
+function extractZipEntries(bytes) {
+  if (!bytes || bytes.length < 4) return [];
+  const entries = [];
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+
+  while (offset + 30 <= bytes.length) {
+    const signature = view.getUint32(offset, true);
+    if (signature !== 0x04034b50) {
+      break;
+    }
+
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const method = view.getUint16(offset + 8, true);
+    const compressedSize = view.getUint32(offset + 18, true);
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + nameLength;
+    const dataStart = nameEnd + extraLength;
+    const dataEnd = dataStart + compressedSize;
+
+    if (dataEnd > bytes.length) {
+      break;
+    }
+
+    const nameBytes = bytes.slice(nameStart, nameEnd);
+    const name = new TextDecoder("utf-8", { fatal: false }).decode(nameBytes);
+    const rawData = bytes.slice(dataStart, dataEnd);
+    entries.push({ name, method, rawData });
+    offset = dataEnd;
+  }
+
+  return entries;
+}
+
+async function inflateZipEntry(entry) {
+  if (!entry || !entry.rawData) return new Uint8Array();
+  if (entry.method === 0) return entry.rawData;
+  if (typeof DecompressionStream === "undefined") return new Uint8Array();
+
+  try {
+    const ds = new DecompressionStream("deflate-raw");
+    const writer = ds.writable.getWriter();
+    await writer.write(entry.rawData);
+    await writer.close();
+    const inflated = await new Response(ds.readable).arrayBuffer();
+    return new Uint8Array(inflated);
+  } catch (e) {
+    console.warn("inflateZipEntry failed:", e.message);
+    return new Uint8Array();
+  }
+}
+
+async function extractDocxTextFromBytes(bytes) {
+  if (!bytes || bytes.length === 0) return "";
+  const zipEntries = extractZipEntries(bytes);
+  const documentEntry = zipEntries.find((entry) => entry.name === "word/document.xml" || entry.name.endsWith("/word/document.xml"));
+  if (!documentEntry) return "";
+
+  const xmlBytes = await inflateZipEntry(documentEntry);
+  const xml = new TextDecoder("utf-8", { fatal: false }).decode(xmlBytes);
+  const textMatches = [...xml.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map((m) => decodeXmlEntities(m[1]).trim());
+  const cleaned = textMatches.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  return cleaned.slice(0, 20000);
+}
+
+async function extractXlsxTextFromBytes(bytes) {
+  if (!bytes || bytes.length === 0) return "";
+  const zipEntries = extractZipEntries(bytes);
+  const sharedStringsEntry = zipEntries.find((entry) => entry.name === "xl/sharedStrings.xml" || entry.name.endsWith("/xl/sharedStrings.xml"));
+  const sheetEntries = zipEntries.filter((entry) => /^xl\/worksheets\/.+\.xml$/i.test(entry.name) || /\/xl\/worksheets\/.+\.xml$/i.test(entry.name));
+
+  let sharedStrings = [];
+  if (sharedStringsEntry) {
+    const sharedXml = new TextDecoder("utf-8", { fatal: false }).decode(await inflateZipEntry(sharedStringsEntry));
+    const matches = [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)];
+    sharedStrings = matches.map((match) => {
+      const text = decodeXmlEntities(match[1].replace(/<[^>]+>/g, " "));
+      return text.replace(/\s+/g, " ").trim();
+    });
+  }
+
+  const sheetValues = [];
+  for (const sheetEntry of sheetEntries) {
+    const xml = new TextDecoder("utf-8", { fatal: false }).decode(await inflateZipEntry(sheetEntry));
+
+    const inlineValues = [...xml.matchAll(/<is\b[^>]*>([\s\S]*?)<\/is>/g)].map((match) => decodeXmlEntities(match[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim());
+    inlineValues.filter(Boolean).forEach((value) => sheetValues.push(value));
+
+    const sharedReferences = [...xml.matchAll(/<c[^>]*t="s"[^>]*>[\s\S]*?<v>(\d+)<\/v>[\s\S]*?<\/c>/g)].map((match) => Number(match[1]));
+    sharedReferences.forEach((index) => {
+      if (sharedStrings[index]) sheetValues.push(sharedStrings[index]);
+    });
+
+    const directValues = [...xml.matchAll(/<c[^>]*>[\s\S]*?<v>([^<]+)<\/v>[\s\S]*?<\/c>/g)].map((match) => match[1].trim());
+    directValues.filter((value) => value && !/^\d+(?:\.\d+)?$/.test(value)).forEach((value) => sheetValues.push(value));
+  }
+
+  const deduped = [...new Set(sheetValues.filter(Boolean))].slice(0, 200).join("\n");
+  return deduped;
+}
+
+async function extractDocumentText(documentBase64, mimeType, fileName) {
+  if (!documentBase64) {
+    console.log("[DOC] extractDocumentText skipped: no base64");
+    return "";
+  }
+
+  const normalizedMime = String(mimeType || "").toLowerCase();
+  const normalizedName = String(fileName || "").toLowerCase();
+  const bytes = decodeBase64ToUint8Array(documentBase64);
+  console.log("[DOC] parse start", {
+    fileName,
+    mimeType: normalizedMime,
+    bytesLength: bytes.length,
+    normalizedName,
+  });
+
+  const textLikeExtensions = [
+    ".txt", ".md", ".csv", ".json", ".log", ".xml", ".html", ".htm", ".rtf", ".sql",
+    ".yaml", ".yml", ".ini", ".cfg", ".properties", ".env"
+  ];
+
+  if (normalizedMime.includes("pdf") || normalizedName.endsWith(".pdf")) {
+    const pdfText = extractPdfTextFromBytes(bytes);
+    console.log("[DOC] PDF parsed", { fileName, length: pdfText.length, preview: pdfText.slice(0, 180) });
+    return pdfText;
+  }
+
+  if (normalizedMime.includes("docx") || normalizedName.endsWith(".docx")) {
+    const docxText = await extractDocxTextFromBytes(bytes);
+    console.log("[DOC] DOCX parsed", { fileName, length: docxText.length, preview: docxText.slice(0, 180) });
+    return docxText;
+  }
+
+  if (normalizedMime.includes("sheet") || normalizedMime.includes("excel") || normalizedName.endsWith(".xlsx") || normalizedName.endsWith(".xls")) {
+    const xlsxText = await extractXlsxTextFromBytes(bytes);
+    console.log("[DOC] XLSX parsed", { fileName, length: xlsxText.length, preview: xlsxText.slice(0, 180) });
+    if (xlsxText) return xlsxText;
+  }
+
+  if (
+    normalizedMime.startsWith("text/") ||
+    normalizedMime.includes("json") ||
+    normalizedMime.includes("csv") ||
+    normalizedMime.includes("xml") ||
+    normalizedMime.includes("javascript") ||
+    normalizedMime.includes("html") ||
+    textLikeExtensions.some((ext) => normalizedName.endsWith(ext))
+  ) {
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    const trimmed = text.trim().slice(0, 20000);
+    console.log("[DOC] text file parsed", { fileName, length: trimmed.length, preview: trimmed.slice(0, 180) });
+    return trimmed;
+  }
+
+  if (normalizedMime.includes("doc") || normalizedName.endsWith(".doc") || normalizedName.endsWith(".ppt") || normalizedName.endsWith(".pptx")) {
+    console.log("[DOC] unsupported office format with no text extraction", { fileName, mimeType: normalizedMime });
+    return "";
+  }
+
+  console.log("[DOC] no extractor matched", { fileName, mimeType: normalizedMime, normalizedName });
+  return "";
+}
+
+// OCR.space fallback recognizer. Requires OCR_SPACE_API_KEY in env to be set.
+async function ocrSpaceRecognize(documentBase64, mimeType, apiKey) {
+  if (!documentBase64 || !apiKey) return "";
+  try {
+    const cleaned = String(documentBase64).replace(/^data:.*;base64,/, "");
+    const fd = new FormData();
+    fd.append("apikey", apiKey);
+    fd.append("base64Image", `data:${mimeType || 'application/octet-stream'};base64,${cleaned}`);
+    fd.append("language", "rus+eng");
+    fd.append("isTable", "false");
+
+    const resp = await fetch("https://api.ocr.space/parse/image", { method: "POST", body: fd });
+    const j = await resp.json();
+    if (j && j.ParsedResults && j.ParsedResults.length) {
+      return j.ParsedResults.map(p => p.ParsedText).join("\n\n");
+    }
+  } catch (e) {
+    console.error("[OCR] ocrSpaceRecognize error:", e.message || e);
+  }
+  return "";
+}
+
+// ============================================================
+// CLAUDE BIRIKTIRMALARI — rasm (vision) va PDF (document) bloklari
+// ============================================================
+// Claude PDF va rasmni o'zi o'qiydi, shuning uchun bu turlarni matnga
+// aylantirmasdan to'g'ridan-to'g'ri content blok sifatida yuboramiz.
+// Qolgan formatlar (docx/xlsx/txt) uchun matn ajratamiz.
+const CLAUDE_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+// Anthropic so'rov limiti 32 MB; frontend 4 MB bilan chegaralaydi.
+const CLAUDE_ATTACHMENT_MAX_BASE64 = 6_000_000;
+
+function normalizeBase64(value) {
+  // data: prefiksi va yangi qator belgilari Anthropic tomonidan qabul qilinmaydi
+  return String(value || "").replace(/^data:.*;base64,/, "").replace(/\s+/g, "");
+}
+
+function detectAttachmentKind(mimeType, fileName) {
+  const mime = String(mimeType || "").toLowerCase();
+  const name = String(fileName || "").toLowerCase();
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return "pdf";
+  if (CLAUDE_IMAGE_MIME_TYPES.includes(mime)) return "image";
+  if (mime.startsWith("image/")) return "image_unsupported"; // masalan iPhone HEIC
+  return "other";
+}
+
+// Claude to'g'ridan o'qiy oladigan blok qaytaradi; aks holda null.
+function buildAttachmentBlock(kind, base64Value, mimeType) {
+  const data = normalizeBase64(base64Value);
+  if (!data || data.length > CLAUDE_ATTACHMENT_MAX_BASE64) return null;
+  if (kind === "pdf") {
+    return { type: "document", source: { type: "base64", media_type: "application/pdf", data } };
+  }
+  if (kind === "image") {
+    return { type: "image", source: { type: "base64", media_type: String(mimeType).toLowerCase(), data } };
+  }
+  return null;
 }
 
 // ============================================================
@@ -109,6 +421,10 @@ const MAX_WEBHOOK_SECRET = "musofir2026max";
 
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 const CLAUDE_MODEL_LIGHT = "claude-haiku-4-5-20251001"; // Oddiy vazifalar uchun (arzonroq)
+const ANTHROPIC_PRICING_PER_MTOK = {
+  [CLAUDE_MODEL]: { input: 3.0, output: 15.0 },
+  [CLAUDE_MODEL_LIGHT]: { input: 0.8, output: 4.0 },
+};
 
 // MUSOFIR AI MVP — migratsiya yordamchisi uchun maxsus system prompt
 const MUSOFIR_AI_SYSTEM_PROMPT = `Sen MUSOFIR AI — xalqaro migrantlar uchun shaxsiy yo'riqnoma beruvchi AI yordamchisan.
@@ -411,7 +727,7 @@ export default {
     if (request.method === "GET") {
       const url = new URL(request.url);
       if (url.searchParams.get("key") === DASHBOARD_KEY) {
-        return handleDashboard();
+        return handleDashboard(request);
       }
       return new Response("MUSOFIR-BOT v2 ishlayapti!", { status: 200 });
     }
@@ -617,6 +933,12 @@ async function handleUserMessage(message) {
     userText: combinedUserText,
     history: priorHistory,
   });
+
+  if (isCreditErrorReply(reply)) {
+    await escalateToOperator(chatId, `[CLAUDE CREDIT] ${combinedUserText}`, message, { notifyUser: false });
+    await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi: credit]");
+    return;
+  }
 
   // "Faqat o'zbek tilida yozing" kabi rad javobni userga yubormaymiz.
   if (isLanguageRefusal(reply)) {
@@ -1040,29 +1362,56 @@ async function runUnifiedBrainRequest(payload) {
 async function askClaude(userMessage, history, ragChunks, options = {}) {
   // enforceUzbek=false bo'lsa, javob foydalanuvchi tilida qoladi (masalan MAX — rusiyzabon).
   // extraSystem — platformaga maxsus system qo'shimchasi (masalan Instagram → Telegramga yo'naltirish).
-  const { enforceUzbek = true, extraSystem = "", customSystemPrompt = "" } = options;
+  const {
+    enforceUzbek = true,
+    extraSystem = "",
+    customSystemPrompt = "",
+    usageChannel = "telegram",
+    usagePhase = "main",
+    attachments = [],   // Claude content bloklari (image/document)
+    maxTokens = 400,
+  } = options;
   // RAG kontekstini matnga aylantirish
   let knowledgeContext = "";
+  const hasAttachments = attachments.length > 0;
+
   if (ragChunks.length > 0) {
+    // Biriktirma bo'lsa, RAG chunklari asosiy manba emas — qo'shimcha kontekst.
     knowledgeContext =
-      "\n\nKNOWLEDGE (faqat shu ma'lumotga asoslan):\n" +
+      (hasAttachments
+        ? "\n\nKNOWLEDGE (qo'shimcha kontekst; asosiy manba — biriktirilgan fayl):\n"
+        : "\n\nKNOWLEDGE (faqat shu ma'lumotga asoslan):\n") +
       ragChunks
         .map((c, i) => `[${i + 1}] ${c.title}\n${c.content}`)
         .join("\n\n");
+  } else if (hasAttachments) {
+    knowledgeContext = "\n\nKNOWLEDGE: (bilim bazasida tegishli ma'lumot yo'q)";
   } else {
     knowledgeContext =
       "\n\nKNOWLEDGE: (bu savol bo'yicha aniq ma'lumot topilmadi — operatorga yo'naltir)";
   }
 
-  // Messages qurish: history + yangi user xabari
+  // Biriktirmaning o'zi to'liq huquqli manba: bilim bazasida ma'lumot yo'qligi
+  // operatorga yo'naltirish sababi emas.
+  if (hasAttachments) {
+    knowledgeContext +=
+      "\n\nMUHIM: foydalanuvchi fayl (hujjat yoki rasm) biriktirdi va u yuqorida berilgan. Javobni aynan shu biriktirma mazmuni asosida ber. Bu holatda hech qachon [OPERATOR] yozma. Agar biriktirma mazmuni savolga javob bermasa, biriktirmada aynan nima ko'rinayotganini ayt.";
+  }
+
+  // Messages qurish: history + yangi user xabari.
+  // Biriktirma bo'lsa — bloklar matndan OLDIN turishi kerak (Anthropic tavsiyasi).
+  const userContent = attachments.length > 0
+    ? [...attachments, { type: "text", text: userMessage }]
+    : userMessage;
+
   const messages = [
     ...history.map((h) => ({ role: h.role, content: h.content })),
-    { role: "user", content: userMessage },
+    { role: "user", content: userContent },
   ];
 
   const body = {
     model: CLAUDE_MODEL,
-    max_tokens: 400,
+    max_tokens: maxTokens,
     temperature: 0.5,
     system: [
       { type: "text", text: customSystemPrompt || SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
@@ -1084,8 +1433,28 @@ async function askClaude(userMessage, history, ragChunks, options = {}) {
   });
 
   const data = await r.json();
+  await saveAiUsage({
+    channel: usageChannel,
+    phase: usagePhase,
+    model: data?.model || CLAUDE_MODEL,
+    input_tokens: toNum(data?.usage?.input_tokens),
+    output_tokens: toNum(data?.usage?.output_tokens),
+    cache_creation_input_tokens: toNum(data?.usage?.cache_creation_input_tokens),
+    cache_read_input_tokens: toNum(data?.usage?.cache_read_input_tokens),
+    history_messages: history.length,
+    rag_chunks: ragChunks.length,
+    status: Array.isArray(data?.content) ? "ok" : "error",
+    error_type: data?.error?.type || null,
+    error_message: data?.error?.message || null,
+    created_at: new Date().toISOString(),
+  });
+
   if (!data.content || !Array.isArray(data.content)) {
     console.error("Claude xato javob:", JSON.stringify(data));
+    // credit tugagan yoki API xatosi — operator emas, maxsus sentinel qaytaramiz
+    if (data.error?.type === "invalid_request_error" && data.error?.message?.includes("credit balance")) {
+      return "[CLAUDE_CREDIT_ERROR]";
+    }
     return "[OPERATOR]";
   }
 
@@ -1100,13 +1469,13 @@ async function askClaude(userMessage, history, ragChunks, options = {}) {
 
   // Safety net: agar model arab yozuvida javob qaytarsa, lotinga qayta yozdiramiz.
   if (containsArabicScript(finalText) && finalText !== "[OPERATOR]") {
-    const rewritten = await rewriteToUzbekLatin(finalText, userMessage);
+    const rewritten = await rewriteToUzbekLatin(finalText, userMessage, { channel: usageChannel, phase: "rewrite" });
     if (rewritten) finalText = rewritten;
   }
 
   // Qat'iy qoida: javob faqat o'zbek tilida bo'lsin (enforceUzbek=false bo'lsa o'tkazib yuboriladi).
   if (enforceUzbek && finalText !== "[OPERATOR]") {
-    const uzbekOnly = await enforceUzbekOnly(finalText, userMessage);
+    const uzbekOnly = await enforceUzbekOnly(finalText, userMessage, { channel: usageChannel, phase: "enforce_uz" });
     if (uzbekOnly) finalText = uzbekOnly;
   }
 
@@ -1142,6 +1511,10 @@ function removeOperatorPhrase(text) {
     .trim();
 }
 
+function isCreditErrorReply(text) {
+  return String(text || "").includes("[CLAUDE_CREDIT_ERROR]");
+}
+
 // Suhbat o'rtasida boshlanuvchi salomlashishni olib tashlaydi.
 // Faqat suhbat boshida salom o'rinli — keyin bot qayta salomlashmasin.
 function stripLeadingGreeting(text) {
@@ -1165,7 +1538,8 @@ function isIdentityQuestion(text) {
   );
 }
 
-async function rewriteToUzbekLatin(rawReply, userMessage) {
+async function rewriteToUzbekLatin(rawReply, userMessage, meta = {}) {
+  const { channel = "telegram", phase = "rewrite" } = meta;
   const rewriteSystem =
     "Sen matn tahrirlovchisan. Faqat lotin yoki kirilldan foydalan. Arab yozuvidan foydalanma. Ma'noni o'zgartirma, faqat yozuv va imloni soddalashtir.";
   const rewriteUser =
@@ -1189,6 +1563,19 @@ async function rewriteToUzbekLatin(rawReply, userMessage) {
   });
 
   const data = await r.json();
+  await saveAiUsage({
+    channel,
+    phase,
+    model: data?.model || CLAUDE_MODEL_LIGHT,
+    input_tokens: toNum(data?.usage?.input_tokens),
+    output_tokens: toNum(data?.usage?.output_tokens),
+    cache_creation_input_tokens: toNum(data?.usage?.cache_creation_input_tokens),
+    cache_read_input_tokens: toNum(data?.usage?.cache_read_input_tokens),
+    status: Array.isArray(data?.content) ? "ok" : "error",
+    error_type: data?.error?.type || null,
+    error_message: data?.error?.message || null,
+    created_at: new Date().toISOString(),
+  });
   if (!data.content || !Array.isArray(data.content)) return "";
 
   const rewritten = data.content
@@ -1204,7 +1591,8 @@ async function rewriteToUzbekLatin(rawReply, userMessage) {
   return rewritten;
 }
 
-async function enforceUzbekOnly(rawReply, userMessage) {
+async function enforceUzbekOnly(rawReply, userMessage, meta = {}) {
+  const { channel = "telegram", phase = "enforce_uz" } = meta;
   const enforceSystem =
     "Sen o'zbek tili muharririsan. Matnni faqat o'zbek tilida qoldir. Boshqa tillardagi iboralarni o'zbekchaga tabiiy tarzda o'tkaz. Ma'noni o'zgartirma, fakt qo'shma. Havola (https://...), @username va raqamlarni aynan o'zgartirmasdan saqla. Hech qachon foydalanuvchiga til bo'yicha tanbeh yoki rad javob yozma.";
   const enforceUser =
@@ -1228,6 +1616,19 @@ async function enforceUzbekOnly(rawReply, userMessage) {
   });
 
   const data = await r.json();
+  await saveAiUsage({
+    channel,
+    phase,
+    model: data?.model || CLAUDE_MODEL_LIGHT,
+    input_tokens: toNum(data?.usage?.input_tokens),
+    output_tokens: toNum(data?.usage?.output_tokens),
+    cache_creation_input_tokens: toNum(data?.usage?.cache_creation_input_tokens),
+    cache_read_input_tokens: toNum(data?.usage?.cache_read_input_tokens),
+    status: Array.isArray(data?.content) ? "ok" : "error",
+    error_type: data?.error?.type || null,
+    error_message: data?.error?.message || null,
+    created_at: new Date().toISOString(),
+  });
   if (!data.content || !Array.isArray(data.content)) return "";
 
   const rewritten = data.content
@@ -1438,6 +1839,16 @@ async function closeOperatorSession(userChatId, closingMsg, bizConnId, platform 
       userText: lastMsg.content,
       history,
     });
+    if (isCreditErrorReply(reply)) {
+      await escalateToOperator(
+        userChatId,
+        `[CLAUDE CREDIT][close-session] ${lastMsg.content}`,
+        { chat: { id: userChatId }, from: { id: userChatId }, business_connection_id: null },
+        { notifyUser: false }
+      );
+      await saveMessage(userChatId, "assistant", "[Operatorga yo'naltirildi: credit]");
+      return;
+    }
     const shouldEscalate = !reply || reply.includes("[OPERATOR]") || isLanguageRefusal(reply);
     const cleanReply = shouldEscalate
       ? "Agar boshqa savolingiz bo'lsa, yozavering 😊"
@@ -1665,6 +2076,38 @@ async function getSetting(key) {
   return Array.isArray(rows) && rows.length > 0 ? rows[0].value : null;
 }
 
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function estimateUsageCost(row) {
+  const model = String(row?.model || "");
+  const rates = ANTHROPIC_PRICING_PER_MTOK[model];
+  if (!rates) return 0;
+
+  const inputTokens = toNum(row?.input_tokens) + toNum(row?.cache_creation_input_tokens) + toNum(row?.cache_read_input_tokens);
+  const outputTokens = toNum(row?.output_tokens);
+  return (inputTokens / 1_000_000) * rates.input + (outputTokens / 1_000_000) * rates.output;
+}
+
+async function saveAiUsage(entry) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/ai_usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify(entry),
+    });
+  } catch (_) {
+    // ai_usage jadvali bo'lmasa yoki vaqtincha xato bo'lsa, asosiy oqim to'xtamasin.
+  }
+}
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -1872,6 +2315,12 @@ async function handleWhatsAppMessage(msg, contactName) {
     history,
   });
 
+  if (isCreditErrorReply(reply)) {
+    await escalateWhatsAppToOperator(chatId, `[CLAUDE CREDIT] ${userText}`, contactName, { notifyUser: false });
+    await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi: credit]");
+    return;
+  }
+
   if (isLanguageRefusal(reply) || reply.includes("[OPERATOR]")) {
     await escalateWhatsAppToOperator(chatId, userText, contactName);
     await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi]");
@@ -1916,7 +2365,8 @@ async function sendWhatsApp(toPhone, text) {
 }
 
 // WhatsApp foydalanuvchisini operatorga (Telegram chatiga) eskalatsiya qilish.
-async function escalateWhatsAppToOperator(chatId, userText, contactName) {
+async function escalateWhatsAppToOperator(chatId, userText, contactName, options = {}) {
+  const { notifyUser = true } = options;
   const history = await getHistory(chatId);
   let historyText = "";
   if (history.length > 0) {
@@ -1930,7 +2380,9 @@ async function escalateWhatsAppToOperator(chatId, userText, contactName) {
     const sentMsg = await sendTelegramWithResult(opId, forwardText);
     if (sentMsg?.message_id) await saveWhatsAppOperatorRequest(chatId, userText, sentMsg.message_id);
   }
-  await sendWhatsApp(chatId, "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!");
+  if (notifyUser) {
+    await sendWhatsApp(chatId, "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!");
+  }
 }
 
 // Operator faol suhbatda bo'lsa, WhatsApp xabarini unga uzatish.
@@ -2018,12 +2470,14 @@ async function handleInstagramWebhook(request, url, ctx) {
           }
         }
         // Izoh (comment) hodisalari — Meta panelida "comments" field obuna qilingan bo'lishi kerak
+        console.log("IG entry.changes:", JSON.stringify(entry.changes || []));
         for (const change of entry.changes || []) {
-          if (change.field !== "comments") continue;
+          if (change.field !== "comments") { console.log("IG: comment emas, field=", change.field); continue; }
           try {
+            console.log("IG comment keldi:", JSON.stringify(change.value));
             await handleInstagramComment(change.value, entry.id);
           } catch (e) {
-            console.error("Instagram izoh ishlov xatosi:", e.message);
+            console.error("Instagram izoh ishlov xatosi:", e.message, e.stack);
           }
         }
       }
@@ -2043,6 +2497,9 @@ async function handleInstagramMessage(ev) {
   const chatId = ev.sender?.id;
   if (!chatId) return;
   const userText = (ev.message.text || "").trim();
+
+  // Story reaksiyalari (🔥❤️ va h.k.) — bot indamaydi.
+  if (ev.message.reactions || ev.message.reaction) return;
 
   // Reels / post ulashuvi / story mention → bot indamaydi: javob ham bermaydi,
   // operatorga ham yubormaydi. Faqat iz uchun kiruvchi xabarni saqlab qo'yamiz.
@@ -2089,6 +2546,12 @@ async function handleInstagramMessage(ev) {
     history,
   });
 
+  if (isCreditErrorReply(reply)) {
+    await escalateInstagramToOperator(chatId, `[CLAUDE CREDIT] ${userText}`, { notifyUser: false });
+    await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi: credit]");
+    return;
+  }
+
   if (isLanguageRefusal(reply) || reply.includes("[OPERATOR]")) {
     await escalateInstagramToOperator(chatId, userText);
     await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi]");
@@ -2113,15 +2576,19 @@ async function handleInstagramComment(value, igAccountId) {
   const commenterId = value?.from?.id;
   const text = (value?.text || "").trim();
 
-  if (!commentId || !commenterId) return;
+  console.log(`IG izoh: commentId=${commentId} commenterId=${commenterId} igAccountId=${igAccountId} text="${text}"`);
+
+  if (!commentId || !commenterId) { console.log("IG izoh: commentId yoki commenterId yo'q, chiqib ketdi"); return; }
 
   // Loop oldini olish: o'z (akkauntimiz) izohlariga javob bermaymiz.
-  if (commenterId === igAccountId) return;
-  if (IG_RUNTIME.accountId && commenterId === IG_RUNTIME.accountId) return;
+  if (commenterId === igAccountId) { console.log("IG izoh: o'z izohi, skip"); return; }
+  if (IG_RUNTIME.accountId && commenterId === IG_RUNTIME.accountId) { console.log("IG izoh: runtime accountId match, skip"); return; }
 
   // Takror webhook (Meta qayta yuborishi mumkin) — shu izoh allaqachon ishlandimi?
   const dedupeKey = `ig_cmt_${commentId}`;
-  if (await getSetting(dedupeKey)) return;
+  const alreadyDone = await getSetting(dedupeKey);
+  console.log(`IG izoh dedupe: key=${dedupeKey} alreadyDone=${alreadyDone}`);
+  if (alreadyDone) return;
   await saveSetting(dedupeKey, "1");
 
   const contentful = isContentfulComment(text);
@@ -2152,27 +2619,38 @@ async function handleInstagramComment(value, igAccountId) {
       askOptions: { extraSystem: "" },
     });
 
-    if (isLanguageRefusal(reply) || reply.includes("[OPERATOR]")) {
+    if (reply === "[CLAUDE_CREDIT_ERROR]" || isLanguageRefusal(reply) || reply.includes("[OPERATOR]")) {
       await saveMessage(commenterId, "user", `[Instagram izoh]: ${text}`);
-      // Murakkab holat — operatorga yo'naltiramiz (user'ga DM ni o'zimiz comment_id orqali yuboramiz).
-      await escalateInstagramToOperator(commenterId, `[IZOH]: ${text}`, { notifyUser: false });
-      dmMsg = "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!";
-      await saveMessage(commenterId, "assistant", "[Operatorga yo'naltirildi: izoh]");
+      if (reply === "[CLAUDE_CREDIT_ERROR]") {
+        await escalateInstagramToOperator(commenterId, `[CLAUDE CREDIT][IZOH]: ${text}`, { notifyUser: false });
+        shouldSendDm = false;
+        publicMsg = "";
+        dmMsg = "";
+        await saveMessage(commenterId, "assistant", "[Operatorga yo'naltirildi: credit izoh]");
+      } else {
+        await escalateInstagramToOperator(commenterId, `[IZOH]: ${text}`, { notifyUser: false });
+        dmMsg = "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!";
+        await saveMessage(commenterId, "assistant", "[Operatorga yo'naltirildi: izoh]");
+      }
     } else {
       dmMsg = removeOperatorPhrase(reply);
       if (history.some((h) => h.role === "assistant")) dmMsg = stripLeadingGreeting(dmMsg);
       await saveMessage(commenterId, "user", `[Instagram izoh]: ${text}`);
       await saveMessage(commenterId, "assistant", dmMsg);
+      publicMsg = IG_COMMENT_PUBLIC_REPLY;
     }
-    publicMsg = IG_COMMENT_PUBLIC_REPLY;
   }
 
   // 1) Shaxsiy DM — faqat matnli/commentful holatda yuboramiz
-  if (shouldSendDm) {
-    await sendInstagramCommentPrivateReply(commentId, dmMsg);
+  if (shouldSendDm && dmMsg) {
+    const dmResult = await sendInstagramCommentPrivateReply(commentId, dmMsg);
+    console.log("IG DM natija:", JSON.stringify(dmResult));
   }
   // 2) Izoh ostiga qisqa public javob
-  await replyToInstagramComment(commentId, publicMsg);
+  if (publicMsg) {
+    const pubResult = await replyToInstagramComment(commentId, publicMsg);
+    console.log("IG public reply natija:", JSON.stringify(pubResult));
+  }
 }
 
 // Izoh mazmunli (savol/matn) yoki shunchaki emoji/tinish belgisimi.
@@ -2381,6 +2859,12 @@ async function handleMaxMessage(message) {
     history,
   });
 
+  if (isCreditErrorReply(reply)) {
+    await escalateMaxToOperator(chatId, `[CLAUDE CREDIT] ${userText}`, userName, { notifyUser: false });
+    await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi: credit]");
+    return;
+  }
+
   if (isLanguageRefusal(reply) || reply.includes("[OPERATOR]")) {
     await escalateMaxToOperator(chatId, userText, userName);
     await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi]");
@@ -2424,7 +2908,8 @@ async function sendMax(chatId, text) {
 }
 
 // MAX foydalanuvchisini operatorga (Telegram chatiga) eskalatsiya qilish.
-async function escalateMaxToOperator(chatId, userText, userName) {
+async function escalateMaxToOperator(chatId, userText, userName, options = {}) {
+  const { notifyUser = true } = options;
   const history = await getHistory(chatId);
   let historyText = "";
   if (history.length > 0) {
@@ -2438,7 +2923,9 @@ async function escalateMaxToOperator(chatId, userText, userName) {
     const sentMsg = await sendTelegramWithResult(opId, forwardText);
     if (sentMsg?.message_id) await saveMaxOperatorRequest(chatId, userText, sentMsg.message_id);
   }
-  await sendMax(chatId, "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!");
+  if (notifyUser) {
+    await sendMax(chatId, "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!");
+  }
 }
 
 // Operator faol suhbatda bo'lsa, MAX xabarini unga uzatish.
@@ -2529,12 +3016,14 @@ function handlePrivacy() {
 // ============================================================
 // DASHBOARD
 // ============================================================
-async function handleDashboard() {
+async function handleDashboard(request) {
   const SB = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
   const now = new Date();
   const d1  = new Date(now - 86400000).toISOString();
   const d7  = new Date(now - 7 * 86400000).toISOString();
   const d30 = new Date(now - 30 * 86400000).toISOString();
+  const url = new URL(request.url);
+  const view = (url.searchParams.get("view") || "all").toLowerCase();
 
   async function sbCount(query) {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${query}`, {
@@ -2548,46 +3037,35 @@ async function handleDashboard() {
     return r.json();
   }
 
-  const base = `conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&content=not.like.[%25`;
-
-  const [totalUsers, activeToday, activeWeek, activeMonth, totalMsgs, pendingOps, recentOps] = await Promise.all([
-    // Jami unique userlar
+  const [totalUsers, activeToday, activeWeek, activeMonth, totalMsgs, pendingOps, recentOps, recentMsgs, last30Rows, aiUsageRowsRaw] = await Promise.all([
     sbCount(`conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&select=chat_id`).then(async () => {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&select=chat_id`, { headers: SB });
       const rows = await r.json();
       return new Set(rows.map(x => x.chat_id)).size;
     }),
-    // Bugun aktiv
     (async () => {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&created_at=gte.${d1}&select=chat_id`, { headers: SB });
       const rows = await r.json();
       return new Set(rows.map(x => x.chat_id)).size;
     })(),
-    // 7 kun aktiv
     (async () => {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&created_at=gte.${d7}&select=chat_id`, { headers: SB });
       const rows = await r.json();
       return new Set(rows.map(x => x.chat_id)).size;
     })(),
-    // 30 kun aktiv
     (async () => {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&created_at=gte.${d30}&select=chat_id`, { headers: SB });
       const rows = await r.json();
       return new Set(rows.map(x => x.chat_id)).size;
     })(),
-    // Jami xabarlar (bugun)
     sbCount(`conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&created_at=gte.${d1}&select=id`),
-    // Pending operator so'rovlar
     sbCount(`operator_requests?status=eq.pending&select=id`),
-    // Pending so'rovlar ro'yxati
     sbFetch(`operator_requests?status=eq.pending&order=created_at.desc&limit=10&select=user_chat_id,user_question,created_at`),
+    sbFetch(`conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&role=eq.user&order=created_at.desc&limit=20&select=chat_id,content,created_at`),
+    sbFetch(`conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&created_at=gte.${d30}&select=role,content,created_at,chat_id`),
+    sbFetch(`ai_usage?created_at=gte.${d30}&select=channel,phase,model,input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens,status`),
   ]);
 
-  // So'nggi suhbatlar (har userdan oxirgi xabar)
-  const recentMsgs = await sbFetch(
-    `conversations?chat_id=not.in.(${OPERATOR_IDS_FILTER})&role=eq.user&order=created_at.desc&limit=20&select=chat_id,content,created_at`
-  );
-  // Har userdan faqat birinchisini olamiz
   const seenUsers = new Set();
   const recentUniq = recentMsgs.filter(m => {
     if (seenUsers.has(m.chat_id)) return false;
@@ -2595,7 +3073,78 @@ async function handleDashboard() {
     return true;
   }).slice(0, 10);
 
+  const channelCounts = { Telegram: 0, Instagram: 0, WhatsApp: 0, "Mini App": 0, MAX: 0 };
+  const channelUsageCosts = { Telegram: 0, Instagram: 0, WhatsApp: 0, "Mini App": 0, MAX: 0 };
+  const assistantRows = Array.isArray(last30Rows) ? last30Rows.filter(x => x.role === "assistant") : [];
+  const userRows = Array.isArray(last30Rows) ? last30Rows.filter(x => x.role === "user") : [];
+  const aiUsageRows = Array.isArray(aiUsageRowsRaw) ? aiUsageRowsRaw : [];
+  const usageAvailable = Array.isArray(aiUsageRowsRaw) && aiUsageRows.length > 0;
+
+  function classifyChannel(content) {
+    const c = String(content || "").toLowerCase();
+    if (c.includes("instagram")) return "Instagram";
+    if (c.includes("whatsapp")) return "WhatsApp";
+    if (c.includes("mini app") || c.includes("webapp")) return "Mini App";
+    if (c.includes("max")) return "MAX";
+    return "Telegram";
+  }
+
+  function normalizeChannelName(channel) {
+    const c = String(channel || "").toLowerCase();
+    if (c === "instagram") return "Instagram";
+    if (c === "whatsapp") return "WhatsApp";
+    if (c === "webapp" || c === "mini app") return "Mini App";
+    if (c === "max") return "MAX";
+    return "Telegram";
+  }
+
+  for (const row of [...userRows, ...assistantRows]) {
+    channelCounts[classifyChannel(row.content)] += 1;
+  }
+
+  const fallbackReplies = assistantRows.filter(row => {
+    const c = String(row.content || "").toLowerCase();
+    return c.includes("operatorga") || c.includes("claude_credit_error") || c.includes("[operator]") || c.includes("operator") || c.includes("yo'naltirildi");
+  }).length;
+  const directReplies = assistantRows.length - fallbackReplies;
+  const approxCostLegacy = (directReplies * 0.008) + (fallbackReplies * 0.002);
+
+  let usageMainCalls = 0;
+  let usageMainInputTokens = 0;
+  let usageMainOutputTokens = 0;
+  let usageMainCost = 0;
+  let usageTotalCost = 0;
+  let usageTrackedChannelsTotal = 0;
+
+  for (const row of aiUsageRows) {
+    const cost = estimateUsageCost(row);
+    usageTotalCost += cost;
+
+    const ch = normalizeChannelName(row.channel);
+    if (Object.prototype.hasOwnProperty.call(channelUsageCosts, ch)) {
+      channelUsageCosts[ch] += cost;
+      usageTrackedChannelsTotal += cost;
+    }
+
+    if ((row.phase || "") === "main") {
+      usageMainCalls += 1;
+      usageMainInputTokens += toNum(row.input_tokens) + toNum(row.cache_creation_input_tokens) + toNum(row.cache_read_input_tokens);
+      usageMainOutputTokens += toNum(row.output_tokens);
+      usageMainCost += cost;
+    }
+  }
+
+  const estCost = usageAvailable ? usageTotalCost : approxCostLegacy;
+
   const ts = now.toLocaleString("uz-UZ", { timeZone: "Asia/Tashkent" });
+  const viewTitle = view === "cost" ? "💸 Xarajat tahlili" : view === "channels" ? "📈 Kanal bo‘yicha sarf" : "📊 Umumiy dashboard";
+
+  const channelRows = Object.entries(channelCounts)
+    .map(([name, count]) => {
+      const cost = channelUsageCosts[name] || 0;
+      return { name, count, cost };
+    })
+    .sort((a, b) => b.count - a.count);
 
   const html = `<!DOCTYPE html>
 <html lang="uz">
@@ -2608,23 +3157,24 @@ async function handleDashboard() {
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;padding:24px}
   h1{font-size:22px;font-weight:700;color:#38bdf8;margin-bottom:4px}
   .sub{font-size:13px;color:#64748b;margin-bottom:28px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:32px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:24px}
   .card{background:#1e293b;border-radius:12px;padding:20px;border:1px solid #334155}
   .card .val{font-size:36px;font-weight:800;color:#38bdf8;line-height:1}
   .card .lbl{font-size:12px;color:#94a3b8;margin-top:6px}
   .card.warn .val{color:#f59e0b}
   .card.danger .val{color:#f87171}
+  .tabs{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 24px}
+  .tabs a{padding:8px 12px;border-radius:999px;background:#0f172a;border:1px solid #334155;color:#cbd5e1;text-decoration:none;font-size:13px}
+  .tabs a.active{background:#38bdf8;color:#082f49;border-color:#38bdf8}
   section{background:#1e293b;border-radius:12px;padding:20px;border:1px solid #334155;margin-bottom:20px}
   section h2{font-size:15px;font-weight:600;color:#cbd5e1;margin-bottom:16px}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th{text-align:left;color:#64748b;font-weight:500;padding:6px 10px;border-bottom:1px solid #334155}
   td{padding:8px 10px;border-bottom:1px solid #1e293b;color:#cbd5e1;vertical-align:top}
   tr:last-child td{border-bottom:none}
-  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
-  .tag.pending{background:#7c3aed22;color:#a78bfa;border:1px solid #7c3aed44}
   .time{color:#64748b;font-size:11px}
   .msg{max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .refresh-bar{display:flex;align-items:center;gap:10px;font-size:13px;color:#64748b;margin-bottom:28px}
+  .refresh-bar{display:flex;align-items:center;gap:10px;font-size:13px;color:#64748b;margin-bottom:20px}
   .refresh-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;animation:pulse 1.5s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
   .progress{flex:1;max-width:120px;height:3px;background:#1e293b;border-radius:2px;overflow:hidden}
@@ -2633,12 +3183,19 @@ async function handleDashboard() {
 </head>
 <body>
 <h1>Musofir Shou Dashboard</h1>
+<div class="sub">${viewTitle}</div>
 <div class="refresh-bar">
   <div class="refresh-dot"></div>
   <span id="ts">${ts}</span>
   <span>·</span>
   <div class="progress"><div class="progress-fill" id="pbar" style="width:100%"></div></div>
   <span id="countdown">30s</span>
+</div>
+
+<div class="tabs">
+  <a href="/dashboard?key=${DASHBOARD_KEY}" class="${view === "all" ? "active" : ""}">Umumiy</a>
+  <a href="/dashboard?key=${DASHBOARD_KEY}&view=cost" class="${view === "cost" ? "active" : ""}">💸 Xarajat</a>
+  <a href="/dashboard?key=${DASHBOARD_KEY}&view=channels" class="${view === "channels" ? "active" : ""}">📈 Kanal</a>
 </div>
 
 <div class="grid">
@@ -2667,6 +3224,43 @@ async function handleDashboard() {
     <div class="lbl">Kutilayotgan so'rovlar</div>
   </div>
 </div>
+
+${(view === "all" || view === "cost") ? `
+<section>
+  <h2>💸 Xarajat tahlili (30 kun)</h2>
+  <table>
+    ${usageAvailable ? `
+    <tr><th>Holat</th><th>Son</th><th>Qiymat</th></tr>
+    <tr><td>Main Claude chaqiruvlari</td><td>${usageMainCalls}</td><td>$${usageMainCost.toFixed(2)}</td></tr>
+    <tr><td>Main input tokenlar (cache bilan)</td><td>${usageMainInputTokens.toLocaleString("en-US")}</td><td>-</td></tr>
+    <tr><td>Main output tokenlar</td><td>${usageMainOutputTokens.toLocaleString("en-US")}</td><td>-</td></tr>
+    <tr><td>Barcha Claude chaqiruvlari (rewrite/enforce bilan)</td><td>${aiUsageRows.length}</td><td>$${usageTotalCost.toFixed(2)}</td></tr>
+    <tr><td><b>Jami token-based sarf</b></td><td><b>${aiUsageRows.length}</b></td><td><b>$${usageTotalCost.toFixed(2)}</b></td></tr>
+    ` : `
+    <tr><th>Holat</th><th>Son</th><th>Taxminiy narx</th></tr>
+    <tr><td>To'g'ridan-to'g'ri AI javoblar</td><td>${directReplies}</td><td>$${(directReplies * 0.008).toFixed(2)}</td></tr>
+    <tr><td>Fallback / operatorga yo'naltirilganlar</td><td>${fallbackReplies}</td><td>$${(fallbackReplies * 0.002).toFixed(2)}</td></tr>
+    <tr><td><b>Jami taxminiy sarf</b></td><td><b>${assistantRows.length}</b></td><td><b>$${approxCostLegacy.toFixed(2)}</b></td></tr>
+    `}
+  </table>
+  <div class="sub" style="margin-top:12px">${usageAvailable ? "Token-based hisob ishga tushdi. Narxlar model tariflari bo'yicha hisoblanadi; Anthropic invoice bilan biroz farq bo'lishi mumkin." : "ai_usage jadvali hali to'lmagan yoki yo'q. Hozircha taxminiy model ko'rsatildi."}</div>
+</section>` : ""}
+
+${(view === "all" || view === "channels") ? `
+<section>
+  <h2>📈 Kanal bo'yicha sarf (30 kun)</h2>
+  <table>
+    <tr><th>Kanal</th><th>Xabarlar</th><th>Ulush</th><th>${usageAvailable ? "Token-based sarf" : "Taxminiy sarf"}</th></tr>
+    ${channelRows.map(row => `
+      <tr>
+        <td>${row.name}</td>
+        <td>${row.count}</td>
+        <td>${((row.count / Math.max(1, [...channelRows].reduce((s, x) => s + x.count, 0))) * 100).toFixed(1)}%</td>
+        <td>${usageAvailable ? `$${row.cost.toFixed(2)}` : "-"}</td>
+      </tr>`).join("")}
+  </table>
+  ${usageAvailable ? `<div class="sub" style="margin-top:12px">Kanal kesimidagi jami: $${usageTrackedChannelsTotal.toFixed(2)}</div>` : ""}
+</section>` : ""}
 
 ${pendingOps > 0 ? `
 <section>
@@ -2769,32 +3363,40 @@ async function handleWebAppInit(request) {
 
     console.log("[INIT] Data string for hashing:", dataStr);
 
-    // Validate using HMAC-SHA256 with bot token as key (Telegram standard)
+    // Validate using Telegram Web App algorithm:
+    // secret_key = SHA256(bot_token) (raw bytes), then HMAC-SHA256(dataStr, secret_key)
     try {
-      const key = await crypto.subtle.importKey(
+      if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN.length === 0) {
+        console.error("[INIT] Missing TELEGRAM_BOT_TOKEN in runtime env");
+        return new Response(JSON.stringify({ error: "Server misconfiguration" }), { status: 500, headers: CORS_HEADERS });
+      }
+
+      // Compute SHA-256 of bot token to use as HMAC key (raw bytes)
+      const botTokenHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(TELEGRAM_BOT_TOKEN));
+      const hmacKey = await crypto.subtle.importKey(
         "raw",
-        new TextEncoder().encode(TELEGRAM_BOT_TOKEN),
+        botTokenHash,
         { name: "HMAC", hash: "SHA-256" },
         false,
         ["sign"]
       );
-      const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(dataStr));
-      const calculatedHash = [...new Uint8Array(signature)].map(b => b.toString(16).padStart(2, "0")).join("");
-      
+
+      const signature = await crypto.subtle.sign("HMAC", hmacKey, new TextEncoder().encode(dataStr));
+      const calculatedHash = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, "0")).join("");
+
       console.log("[INIT] Calculated hash:", calculatedHash);
       console.log("[INIT] Expected hash:  ", hashFromData);
-      console.log("[INIT] Match?", calculatedHash === hashFromData);
-      
+
       if (calculatedHash === hashFromData) {
         console.log("[INIT] ✅ SIGNATURE VALID!");
         console.log("[INIT] ========== SIGNATURE DEBUG END ==========");
-        
+
         // Extract user info
         const userStr = parts.get("user");
         const user = userStr ? JSON.parse(decodeURIComponent(userStr)) : { id: 0, is_bot: false };
         const chatId = user.id;
         const history = await getHistory(chatId);
-        
+
         return new Response(JSON.stringify({
           ok: true,
           chat_id: chatId,
@@ -2804,26 +3406,13 @@ async function handleWebAppInit(request) {
       } else {
         console.error("[INIT] ❌ HASH MISMATCH - Signature validation failed");
         console.log("[INIT] ========== SIGNATURE DEBUG END ==========");
+        return new Response(JSON.stringify({ error: "Signature validation failed" }), { status: 403, headers: CORS_HEADERS });
       }
     } catch (e) {
-      console.error("[INIT] Signature validation error:", e.message);
+      console.error("[INIT] Signature validation error:", e && e.message ? e.message : e);
       console.log("[INIT] ========== SIGNATURE DEBUG END ==========");
+      return new Response(JSON.stringify({ error: "Signature validation error" }), { status: 500, headers: CORS_HEADERS });
     }
-    
-    // TEMPORARY: Skip validation for testing - remove this after debugging
-    console.log("[INIT] ⚠️  TEMPORARY: Skipping validation for testing...");
-    const userStr = parts.get("user");
-    const user = userStr ? JSON.parse(decodeURIComponent(userStr)) : { id: 0, is_bot: false };
-    const chatId = user.id;
-    const history = await getHistory(chatId);
-    
-    return new Response(JSON.stringify({
-      ok: true,
-      chat_id: chatId,
-      user: { id: user.id, first_name: user.first_name || "User", username: user.username },
-      history: history.slice(-20),
-      warning: "Signature validation bypassed for testing"
-    }), { status: 200, headers: CORS_HEADERS });
   } catch (e) {
     console.error("webapp/init error:", e);
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS_HEADERS });
@@ -2848,21 +3437,83 @@ async function handleWebAppChat(request) {
     const userProfile = data.profile || null;
     const imageBase64 = data.image_base64 || null;
     const imageType = data.image_type || "image/jpeg";
+    const documentBase64 = data.document_base64 || null;
+    const documentMime = data.document_mime || "application/pdf";
     const documentName = data.document_name || null;
     const isAuto = data._auto === true; // profil yaratilgandan keyin avtomatik birinchi xabar
 
-    if (!chatId || !userText) {
-      return new Response(JSON.stringify({ error: "chat_id, message required" }), { status: 400, headers: CORS_HEADERS });
+    if (!chatId || (!userText && !imageBase64 && !documentBase64)) {
+      return new Response(JSON.stringify({ error: "chat_id, message or attachment required" }), { status: 400, headers: CORS_HEADERS });
     }
 
     if (userText.length > 2000) {
       return new Response(JSON.stringify({ error: "Message too long" }), { status: 400, headers: CORS_HEADERS });
     }
 
-    // Biriktirma nomini matn boshiga qo'shamiz
-    let enrichedText = userText;
-    if (documentName) enrichedText = `[Biriktirma: ${documentName}]\n${userText}`;
-    else if (imageBase64) enrichedText = `[Rasm yuborildi: ${imageType}]\n${userText}`;
+    // Rasm ham, hujjat ham bitta biriktirma sifatida ishlanadi
+    // (frontend rasm uchun ikkala maydonni ham yuboradi).
+    const attachmentBase64 = documentBase64 || imageBase64;
+    const attachmentMime = documentBase64 ? documentMime : imageType;
+    const attachmentName = documentName || (imageBase64 ? "rasm" : null);
+    const attachmentKind = attachmentBase64 ? detectAttachmentKind(attachmentMime, attachmentName) : null;
+    const hasAttachment = !!attachmentBase64;
+
+    // Eski (keshlangan) Mini App faqat fayl NOMINI yuboradi, baytlarini emas.
+    // Bunda tahlil qiladigan narsa yo'q — Claude'ni chaqirmasdan aniq javob beramiz,
+    // aks holda model "hech qanday fayl ko'rinmayapti" deb chalkash javob qaytaradi.
+    if (documentName && !attachmentBase64) {
+      console.warn("[DOC] fayl nomi keldi, baytlari yo'q", { chatId, documentName });
+      const missingMsg = `"${documentName}" faylining mazmuni serverga yetib kelmadi. Mini App'ni yopib qayta oching — eski versiya keshda qolgan bo'lishi mumkin — va faylni qayta yuboring. Yoki hujjatdagi matnni ko'chirib shu yerga yozing, darhol tahlil qilaman.`;
+      await saveMessage(chatId, "user", `[Biriktirma: ${documentName}]\n${userText}`);
+      await saveMessage(chatId, "assistant", missingMsg);
+      return new Response(JSON.stringify({ ok: true, reply: missingMsg }), { status: 200, headers: CORS_HEADERS });
+    }
+
+    console.log("[DOC] incoming upload", {
+      chatId,
+      attachmentName,
+      attachmentMime,
+      attachmentKind,
+      base64Length: attachmentBase64 ? attachmentBase64.length : 0,
+      userTextLength: userText.length,
+    });
+
+    const attachments = [];   // Claude ga yuboriladigan content bloklari
+    let attachmentNote = "";  // blok qo'llab-quvvatlanmasa — ajratilgan matn
+    let attachmentTag = "";   // tarixda ko'rinadigan qisqa marker
+
+    if (hasAttachment) {
+      attachmentTag = `[Biriktirma: ${attachmentName || attachmentMime}]`;
+      const block = buildAttachmentBlock(attachmentKind, attachmentBase64, attachmentMime);
+
+      if (block) {
+        // PDF va qo'llab-quvvatlanadigan rasm — Claude o'zi o'qiydi (skan PDF ham).
+        attachments.push(block);
+        console.log("[DOC] native block", { chatId, type: block.type });
+      } else {
+        // docx/xlsx/txt yoki qo'llab-quvvatlanmaydigan rasm — matnga aylantiramiz.
+        let extracted = await extractDocumentText(attachmentBase64, attachmentMime, attachmentName);
+        if (!extracted) {
+          console.log("[OCR] Native extraction empty, trying OCR.space fallback...");
+          extracted = await ocrSpaceRecognize(attachmentBase64, attachmentMime, OCR_SPACE_API_KEY);
+        }
+        console.log("[DOC] extracted result", { chatId, attachmentName, extractedLength: extracted.length });
+
+        if (extracted) {
+          attachmentNote = `\n\n[Hujjat matni: ${attachmentName}]\n${extracted.slice(0, 20000)}`;
+        } else {
+          attachmentNote = `\n\n[Bu fayl formatidan matn ajratib bo'lmadi. Foydalanuvchidan hujjatning muhim qismlarini matn ko'rinishida yoki skrinshot qilib yuborishni so'ra.]`;
+        }
+      }
+    }
+
+    // Foydalanuvchi faqat fayl yuborsa ham, AI ga aniq vazifa beramiz.
+    const baseText = userText.trim() || (hasAttachment
+      ? "Shu hujjatni tahlil qil: nima haqida ekanini, muhim shartlarni va e'tibor berishim kerak bo'lgan xavflarni tushuntir."
+      : "");
+    // Tarixga qisqa versiya, Claude ga to'liq versiya (hujjat matni bilan) ketadi.
+    const historyText = attachmentTag ? `${attachmentTag}\n${baseText}` : baseText;
+    const promptText = historyText + attachmentNote;
 
     // Profil asosida extraSystem va customPrompt qurish
     let extraSystem = "";
@@ -2880,28 +3531,37 @@ async function handleWebAppChat(request) {
       customPrompt = MUSOFIR_AI_SYSTEM_PROMPT;
     }
 
-    console.log(`[CHAT] User ${chatId} [${topic}]${isAuto ? " [auto]" : ""}: "${enrichedText.substring(0, 60)}"`);
+    console.log(`[CHAT] User ${chatId} [${topic}]${isAuto ? " [auto]" : ""}: "${historyText.substring(0, 60)}"`);
 
-    if (!isAuto) await saveMessage(chatId, "user", enrichedText);
+    if (!isAuto) await saveMessage(chatId, "user", historyText);
 
     const history = await getHistory(chatId);
 
     const { ragChunks, reply } = await runUnifiedBrainRequest({
       channel: "webapp",
-      userText: enrichedText,
+      userText: promptText,
+      // RAG qidiruvi va web-rejim qarori qisqa matn bo'yicha hal qilinadi:
+      // to'liq hujjat matni embeddingni ham, isWebIntent'ni ham buzib yuboradi.
+      knowledgeQuery: historyText,
       history,
-      knowledgeOptions: { enableWeb: topic === "musofir_ai" },
+      knowledgeOptions: { enableWeb: topic === "musofir_ai" && !hasAttachment },
       askOptions: {
         ...(customPrompt ? { customSystemPrompt: customPrompt } : {}),
         ...(extraSystem  ? { extraSystem } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        ...(hasAttachment ? { maxTokens: 900 } : {}),
         enforceUzbek: topic !== "musofir_ai",
       },
     });
 
-    const webMode = isWebIntent(enrichedText);
+    const webMode = isWebIntent(historyText);
 
     let cleanReply = reply;
-    if (webMode) cleanReply = stripLeadingQuestionEcho(cleanReply, enrichedText);
+    if (isCreditErrorReply(reply)) {
+      cleanReply = "[Operatorga yo'naltirildi: credit]";
+      await escalateToOperator(chatId, `[CLAUDE CREDIT][webapp] ${historyText}`, { chat: { id: chatId }, from: { id: chatId }, business_connection_id: null }, { notifyUser: false });
+    }
+    if (webMode) cleanReply = stripLeadingQuestionEcho(cleanReply, historyText);
 
     if (reply.includes("[OPERATOR]")) {
       if (webMode) {
@@ -2910,7 +3570,7 @@ async function handleWebAppChat(request) {
         cleanReply = "Bu savol bo'yicha to'liq ma'lumot bazamizda yo'q. Operator yordamini tavsiya qilaman — @musofir_shou_bot orqali murojaat qiling.";
       } else {
         cleanReply = "[Muammoga operator yordami kerak. Iltimos, operatorga murojaat qiling.]";
-        await escalateToOperator(chatId, enrichedText, { chat: { id: chatId }, from: { id: chatId }, business_connection_id: null }, { notifyUser: false });
+        await escalateToOperator(chatId, historyText, { chat: { id: chatId }, from: { id: chatId }, business_connection_id: null }, { notifyUser: false });
       }
     }
 
