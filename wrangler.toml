@@ -4,4 +4,4 @@ compatibility_date = "2024-01-01"
 account_id = "ebf9850ffdaf8b754963aeedfb440700"
 
 [triggers]
-crons = ["0 14 * * *"]
+crons = ["0 * * * *"]

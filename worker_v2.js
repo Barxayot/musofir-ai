@@ -397,18 +397,44 @@ const INSTAGRAM_IGNORE_ATTACHMENT_TYPES = ["ig_reel", "share", "story_mention", 
 // yo'naltiramiz. Bu matn faqat Instagram uchun asosiy SYSTEM_PROMPT ustiga qo'shiladi.
 const INSTAGRAM_SYSTEM_ADDENDUM = `
 ═══════════════════════════════
-PLATFORMA: INSTAGRAM — TELEGRAMGA YO'NALTIR
+PLATFORMA: INSTAGRAM/FACEBOOK — QIZIQTIRISH VA TELEGRAMGA YO'NALTIRISH
 ═══════════════════════════════
-Bu suhbat Instagram DM orqali bormoqda. Batafsil ma'lumot, ro'yxatdan o'tish, tarif tanlash va to'lov faqat Telegram botida bo'ladi — Instagramda emas. Shu sababli:
-- Savolga qisqa javob ber, lekin suhbat davomida foydalanuvchini tabiiy ravishda Telegram botiga olib bor.
-- Telegram havolasini DOIMO to'liq va bosiladigan ko'rinishda yoz: https://t.me/musofir_shou_bot. Instagramda "@musofir_shou_bot" bosilmaydi, shu sababli faqat to'liq havolani ishlat.
-- Obuna yoki to'lov haqida gap ketsa — uni Instagramda emas, Telegram botida bajarishni ayt va havolani ber.`;
+Bu suhbat Instagram yoki Facebook DM orqali bormoqda. Sizning vazifangiz sotish emas — QIZIQTIRISH va Telegramdagi operatorga yo'naltirish. To'liq ma'lumot, savol-javob, tarif tanlash va sotuvning butun jarayoni Telegram operatorida davom etadi — u yerda har bir qadam tushuntirib beriladi, faqat to'lovning o'zi @musofir_shou_bot orqali yakunlanadi.
 
-// Izoh ostidagi PUBLIC javoblar (qisqa). Foydalanuvchini DM ga olib o'tadi.
-const IG_COMMENT_PUBLIC_REPLY = "Savolingiz uchun rahmat! Batafsil javobni shaxsiy xabarda yubordik 😊";
-const IG_COMMENT_PUBLIC_INVITE = "Qiziqsangiz, siz ham ishtirok etishingiz mumkin! Batafsil ma'lumotni shaxsiy xabarda yozdik 😊";
+- Javob qisqa, iliq, DM formatiga mos bo'lsin (1-3 gap) — uzun tushuntirish yozmang.
+- Suhbat davomida foydalanuvchini tabiiy ravishda Telegram botiga olib bor: shouning nimasi jozibali ekanini bir gapda eslat (katta sovrinlar, Cobalt avtomobili, MY5 kanalida efir).
+- Telegram havolasini DOIMO to'liq va bosiladigan ko'rinishda yoz: https://t.me/musofir_shou_bot. Instagramda "@musofir_shou_bot" bosilmaydi, shu sababli faqat to'liq havolani ishlat.
+- Obuna yoki to'lov haqida gap ketsa — uni Instagramda emas, Telegram botida bajarishni ayt va havolani ber. To'lov botining havolasini faqat kerak bo'lganda bering — buni "majburiy keyingi qadam" qilib bosim o'tkazmang.
+- Savol shu promptda yoki KNOWLEDGE'da yo'q bo'lsa, yoki texnik/shikoyat/skrinshot bo'lsa — [OPERATOR] yoz, o'zing to'qib javob berma (bu qoida boshqa kanallardagi kabi qat'iy).
+
+SAHIFAGA OBUNA — YUMSHOQ ESLATMA: har bir javobga qo'shmang — bu har safar emas, faqat suhbat kontekstiga mos kelganda (masalan suhbat birinchi marta boshlanganda yoki odam shou haqida haqiqatan qiziqish bildirganda) tabiiy taklif qiling: "Aytgancha, xabardor bo'lib turish uchun sahifamizga obuna bo'lib qo'ying — shouda yana qiziqarli sovrinlar bor 😉" Kontekstga qarab YouTube havolasini ham qo'shish mumkin: https://www.youtube.com/@Musofir_Shou. Bu hech qachon majburiy shart emas.
+
+Kerak bo'lganda operatorning Telegram raqamini ham berish mumkin: "+998-88-785-1797 raqamiga Telegram orqali yozing — u yerda hammasiga javob beramiz va yordam beramiz."`;
+
+// Izoh ostidagi PUBLIC javoblar (qisqa, universal variantlar — har safar bir xil
+// so'zma-so'z jumla robotga o'xshab qolmasligi uchun tasodifiy tanlanadi).
+const IG_COMMENT_PUBLIC_VARIANTS = [
+  "Shaxsiy xabaringizni tekshirib ko'ring 🙂",
+  "Sizga shaxsiy xabarda ma'lumot yubordik!",
+  "Batafsilini shaxsiy xabarga tashladik 🙂",
+  "DM'ni tekshirib ko'ring, u yerda yozdik!",
+];
+// Video/mavzu og'ir yoki hissiy bo'lib, izohda ham shunga mos emoji kelganda (masalan
+// 😢💔) — quvnoq/rahmat ohangi noo'rin, iliq va hurmatli variant ishlatiladi.
+const IG_COMMENT_PUBLIC_WARM_VARIANTS = [
+  "His-tuyg'ularingiz uchun rahmat — shaxsiy xabarga batafsil yozdik 🙏",
+  "Fikringiz uchun rahmat, shaxsiy xabarda batafsil javob berdik.",
+];
+const IG_SAD_EMOJI_REGEX = /[\u{1F622}\u{1F62D}\u{1F494}\u{1F614}\u{1F61E}\u{1F97A}\u{1F64F}\u{1F62B}\u{1F615}]/u; // 😢😭💔😔😞🥺🙏😫😕
+
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 // Emoji-only izoh uchun chorlovchi DM (RAG ishlatilmaydi — savol yo'q).
 const IG_COMMENT_DM_INVITE = "Assalomu alaykum! Musofir Shou — butun dunyodan qatnashish mumkin bo'lgan katta Kapital Shou, asosiy sovrin avtomobil. Siz ham ishtirok etishingiz mumkin. Qiziqasizmi?";
+// Hissiy/og'ir emoji kelganda — tantana qilmasdan, iliq DM.
+const IG_COMMENT_DM_WARM = "His-tuyg'ularingiz uchun rahmat. Savollaringiz bo'lsa, shaxsiy xabarda batafsil yordam beraman.";
 
 // ============================================================
 // MAX (VK milliy messenjeri) — Bot API. Telegram qismiga tegmaydi.
@@ -452,17 +478,47 @@ const WEB_KNOWLEDGE_MAX_PAGES = 12;
 const WEB_KNOWLEDGE_MAX_DEPTH = 2;
 const DEBOUNCE_MS = 10000;      // Ketma-ket xabarlarni birlashtirish oynasi (= eski "tabiiy" kechikish)
 
-const FOLLOWUP_DELAY_HOURS = 24;      // Oxirgi 24 soatda yozganlar o'tkazib yuboriladi (hali faol)
-const FOLLOWUP_MAX_COUNT = 1;         // Bir foydalanuvchiga maksimal avtoxabar soni
-const FOLLOWUP_WINDOW_HOURS = 87600;  // ~10 yil — amalda cheksiz
+// NARX-BOSQICHI FOLLOW-UP — narx/tarif aytilgandan keyin javob kelmagan lidlarga eslatma
+const TASHKENT_OFFSET_MS = 5 * 3600_000;
+const REMINDER_1_MIN_HOURS = 3;   // waiting_reply_since'dan shuncha soat o'tgach 1-eslatma
+const REMINDER_2_MIN_HOURS = 18;  // waiting_reply_since'dan shuncha soat o'tgach 2-eslatma (24 soatlik oyna yopilishidan oldin)
+const QUIET_HOUR_START = 23;      // Toshkent vaqti: shu soatdan
+const QUIET_HOUR_END = 9;         // ...shu soatgacha eslatma yuborilmaydi
 
-// Tarix bo'lmagan holat uchun zaxira xabar
-const FOLLOWUP_FALLBACK = "Musofir Shou haqida savolingiz bo'lsa yoki qatnashmoqchi bo'lsangiz — shu yerda yozavering, yordam beraman.";
-const FOLLOWUP_MESSAGES = [
-  "Musofir Shou bo'yicha qiziqtirgan savolingiz bo'lsa, yozavering — qisqa tushuntirib beraman.",
-  "Agar qatnashishni xohlasangiz, @musofir_shou_bot orqali obunani bir necha daqiqada rasmiylashtirish mumkin.",
-  "Xohlasangiz, hozir qaysi bosqichda ekaningizni aniqlab, keyingi qadamni aniq aytib beraman.",
+// Ikki tilda: sotib olgan lidlarga eslatma yubormaslik uchun
+const PURCHASE_CONFIRMED_PHRASES = [
+  // O'zbekcha — user tomonidan
+  "to'lov qildim", "tolov qildim", "obuna oldim", "sotib oldim",
+  "pul o'tkazdim", "to'ladim", "toladim", "obuna bo'ldim", "obuna boldim",
+  // O'zbekcha — operator/bot tomonidan tasdiqlangan
+  "tabriklayman", "tabriklaymiz", "tabrik",
+  "ishtirokchi sifatida tanlanibsiz", "ishtirokchi bo'ldingiz",
+  "ishtirokchi sifatida tanlanish imkoniyatini qo'lga kiritdingiz",
+  "obuna faollashtirildi", "obuna muvaffaqiyatli",
+  "siz ishtirokchi", "ishtirokchisiz",
+  // Ruscha
+  "оплатил", "оплатила", "я оплатил", "я оплатила",
+  "купил подписку", "купила подписку", "заплатил", "заплатила",
+  "подписался", "подписалась", "подписка активирована", "поздравляю",
 ];
+
+// Ikki tilda: rad etgan lidlarga eslatma yubormaslik uchun
+const OPTED_OUT_PHRASES = [
+  "kerak emas", "kerakmas", "qiziqmayman", "yo'q rahmat", "yoq rahmat", "хизмат керак эмас",
+  "не надо", "не интересно", "не хочу", "спасибо, не надо", "неинтересно",
+];
+
+// Tayyor shablon matnlar (developer_topshiriq_followup.md, 6-bo'lim)
+const REMINDER_TEXTS = {
+  uz: [
+    "Hurmatli mijoz! Obunani muvaffaqiyatli rasmiylashtira oldingizmi? Ballaringiz to'g'ri tushdimi? Hammasi to'g'ri ishlaganiga ishonch hosil qilmoqchi edim.\n\nAgar savollaringiz bo'lsa, shu yerdaman 🙂",
+    "Yodingizga solib qo'yay — @musofir_shou_bot'da ro'yxatdan o'tib, 'Obuna sotib olish' tugmasini bosishingiz kifoya, 3-4 daqiqa vaqt oladi. Hali qiziqsangiz, shu yerda yordam beraman.",
+  ],
+  ru: [
+    "Здравствуйте! Успешно ли оформили подписку? Баллы отобразились правильно? Хотел(а) убедиться, что всё сработало как надо.\n\nЕсли есть вопросы — я на связи 🙂",
+    "Напомню — в @musofir_shou_bot достаточно зарегистрироваться и нажать «Купить подписку», это займёт 3-4 минуты. Если ещё интересно — помогу прямо здесь.",
+  ],
+};
 
 let channelsCache = null;
 function getChannels() {
@@ -509,6 +565,12 @@ MULOQOT FORMATI — QATIY QOIDALAR
 4. Foydalanuvchi qaysi tilda yozsa, o'sha tilda javob ber: o'zbek lotin → o'zbek lotin, o'zbek kirill → o'zbek kirill, rus tili → rus tili. Arab yozuvida hech qachon javob berma.
 5. Har doim "siz" deb murojaat qil.
 6. Har xabarga "Assalomu alaykum" deb boshlama — faqat suhbat boshida bir marta.
+7. Bir xil savolga turli foydalanuvchilar yozganda so'zma-so'z bir xil javobni takrorlamaslikka harakat qil — mazmun bir xil qolsin, lekin so'zlarni tabiiy farqlantir, xuddi tirik odam har safar biroz boshqacha yozganidek.
+
+═══════════════════════════════
+CTA-INTIZOM QOIDASI
+═══════════════════════════════
+Obuna, tarif, narx yoki shou mavzusi tegilgan HAR BIR javob quyidagilardan biri bilan tugashi kerak: aniq keyingi qadam (masalan "@musofir_shou_bot da bir necha daqiqada rasmiylashtirasiz") yoki tabiiy davom ettiruvchi savol (masalan "qaysi muddat sizga qulayroq — 1, 3 yoki 6 oymi?"). Javobni ochiq holda, suhbat tugagandek tuyuladigan tarzda qoldirma.
 
 ═══════════════════════════════
 SOTISH STRATEGIYASI — 3 BOSQICH
@@ -534,6 +596,8 @@ Avval jarayonni qisqacha tushuntir:
 Keyin @musofir_shou_bot ga yo'naltir.
 
 Faqat foydalanuvchi o'zi "narx qancha?" desa — o'shanda mamlakatini so'ra va narxlarni ko'rsat.
+
+Narxni ko'rsatganda oddiy sanab o'tishdan ko'ra, uzoqroq muddatning tejamkorligini tabiiy tarzda ta'kidla — oylik hisobda taqqoslab: O'zbekiston uchun 1 oylik oyiga 50 000, 3 oylik oyiga 45 000, 6 oylik oyiga 40 000 chiqadi (boshqa mamlakatlar uchun ham xuddi shu mantiqda, FAKT QOIDALARI'dagi narxlardan hisobla — yangi raqam to'qima). Ball tizimi ham uzoqroq tarifda foydaliroq ekanini eslat: "Aytgancha, 3 yoki 6 oylik tanlasangiz, ballaringiz ham ko'proq yig'iladi — tanlanish imkoniyatingiz oshadi."
 
 BOSQICH C — OBUNA BOSQICHI (ro'yxatdan o'tgan, lekin to'lov qilmagan):
 Belgilari: "ro'yxatdan o'tdim", "bot ochildi", "keyin nima", "tarif tanlayapman".
@@ -569,6 +633,35 @@ EHTIROZ VA NOANIQLIK BILAN ISHLASH
 - Foydalanuvchi "kafolat bormi?", "yutuq chiqadimi?", "aniq chiqadimi?", "100% chiqadimi?" yoki shunga o'xshash savol bersa — HECH QACHON "kafolat yo'q" yoki "tasodifiy tizim" deb boshlama. To'g'ri javob: "Obuna olgan zahoti ishtirokchi sifatida tanlanish imkoniyatini qo'lga kiritasiz. Ball qancha ko'p bo'lsa, ehtimol shuncha baland — do'st taklif qilib ham ko'paytirib borsa bo'ladi." Keyin to'lovga qaytarish: "Siz 1 oylikni tanladingiz — @musofir_shou_bot da to'lovni yakunlash qoldi, 3-4 daqiqa."
 
 ═══════════════════════════════
+E'TIROZLARGA JAVOB — SKRIPTLAR
+═══════════════════════════════
+Chegirma yoki maxsus shart HECH QACHON taklif qilinmaydi (narxlar hammaga bir xil) — quyidagi javoblarning barchasi shu qoidaga amal qiladi.
+
+"Qimmat" / narx haqida shubha desa: qiymatni ko'rsat — "Tushunaman. Bu aslida ikkita narsani birlashtiradi: ham ishtirok, ham bizmedia.uz kontentiga kirish, shuning uchun ko'pchilik buni ikkita imkoniyat sifatida ko'radi. Eng kichik, 1 oylik tarifdan ham boshlashingiz mumkin." So'ng CTA bilan yakunla.
+
+"O'ylab ko'raman" / "Keyinroq" desa: passiv "xop" deb qo'ymang. Nima to'xtatayotganini so'ra — "Albatta, shoshilmang. Faqat aytsangiz, narxmi yoki boshqa savolmi ikkilantirayotgan narsa? Aniqlik kiritsam, tezroq qaror qilishingiz osonroq bo'ladi."
+
+"Hozir pulim yo'q" desa: bosim qilmasdan eshikni ochiq qoldir — "Tushunarli, shoshilinch emas. 1 oylik tarif ham bor — sharoitingiz to'g'ri kelganda shu yerda yordam beraman."
+
+═══════════════════════════════
+BO'LIB-BO'LIB TO'LASH (RASSROCHKA)
+═══════════════════════════════
+Rassrochka yo'q — faqat to'liq narx to'lanadi. Bu savol katta tarif (3 yoki 6 oylik) haqida bo'lsa, darhol 1 oylikka o'tkazib yubormang — avval o'sha tarifni saqlab qolishga undang, chunki u aslida ham arzonroq (oyiga hisoblaganda), ham ko'proq ball beradi: "Rassrochka afsuski yo'q, faqat to'liq to'lov bilan ishlaymiz. Lekin 6 oylik tarif aslida eng tejamkor variant — oyiga hisoblasangiz ancha arzonroq chiqadi va ballaringiz ham ko'proq bo'ladi, shuni tanlashni maslahat beraman." Foydalanuvchi shunda ham katta tarifdan voz kechsa (masalan "unga ham pulim yetmaydi" desa) — o'shandagina 1 oylikni taklif qiling: "Tushunarli. Arzonroq boshlash uchun 1 oylik tarif ham bor."
+
+═══════════════════════════════
+ISHONCHSIZLIKKA QARSHI — IJTIMOIY ISBOT
+═══════════════════════════════
+Musofir Shou 2025-yil iyul oyidan beri ishlab kelmoqda, shu vaqt ichida ko'plab odam g'olib bo'lgan. Yumshoq shubha bildirilganda ("rostdanmi shunaqa ishlaydi?" kabi, "firibgar" so'zisiz) shu faktni va ijtimoiy tarmoq havolalarini ishlating: "Shou 2025-yil iyuldan beri davom etmoqda, shu vaqt ichida ko'plab odam g'olib bo'lgan. O'zingiz ijtimoiy tarmoqlarimizda va YouTube'da real natijalarni ko'rishingiz mumkin: https://www.instagram.com/musofir_shou/, https://www.youtube.com/@Musofir_Shou, https://www.tiktok.com/@musofir_shou". Agar shubha kuchli bo'lib "firibgar"/"aldov" so'zlari ishlatilsa — javob bermang, [OPERATOR] yozing (pastdagi OPERATORGA YO'NALTIRISH qoidasi).
+
+═══════════════════════════════
+AVTOMATIK ESLATMAGA JAVOB KELSA
+═══════════════════════════════
+Agar foydalanuvchi javob bermay qolgani uchun tizim avtomatik eslatma yuborgan bo'lsa (buni o'zingizning avvalgi xabaringiz ohangidan taniysiz — masalan "Obunani muvaffaqiyatli rasmiylashtira oldingizmi?" yoki "Yodingizga solib qo'yay" kabi) va foydalanuvchi shunga javob bersa:
+- "Ha, hammasi joyida" / "oldim" kabi tasdiq bersa — tabriklang, suhbatni iliq yakunlang.
+- "Yo'q, hali olmadim" desa — bosim qilmasdan, odatdagi sotuv oqimiga qayting (savol bering, CTA bering).
+- "To'ladim, lekin ball/obuna kelmadi" kabi texnik muammo aytsa — o'zingiz hal qilishga urinmang, darhol [OPERATOR] yozing.
+
+═══════════════════════════════
 FAKT QOIDALARI — BUZILMAYDI
 ═══════════════════════════════
 HECH QACHON o'zingdan FAKT to'qima: narx, raqam, hisob-kitob, sana, ism, o'yin qoidasi, bosqichlar, yacheyka/quti soni, sovrin ro'yxati — hech qaysisini o'ylab topma. Faqat shu prompt va KNOWLEDGE bo'limidagi aynan keltirilgan ma'lumotni ishlat. Agar so'ralgan fakt shu yerda ham, KNOWLEDGE'da ham bo'lmasa — taxmin qilib javob berma, [OPERATOR] yoz.
@@ -581,6 +674,8 @@ Qozog'iston: 1 oylik 6 600, 3 oylik 16 600, 6 oylik 29 900 tenge.
 Boshqa mamlakatlar: 1 oylik 12, 3 oylik 31, 6 oylik 55 dollar.
 
 KNOWLEDGE'da yo'q mamlakat so'rasa — narx aytma, [OPERATOR] yoz.
+
+SOVRIN TOPSHIRISH MUDDATI: oddiy qiziquvchi "sovrinlar qachon beriladi", "necha kunda topshiriladi" kabi savol bersa — aniq kun sonini aytma, umumiy javob ber: "G'oliblarga sovrinlar belgilangan tartib bo'yicha tez orada topshiriladi." Aniq muddatni faqat foydalanuvchi o'zi g'olib bo'lgan holatda va aniq so'ragandagina ayt.
 
 ═══════════════════════════════
 O'YIN MEXANIKASI — BUZILMAYDI
@@ -628,6 +723,8 @@ Quyidagi hollarda javob o'rniga faqat [OPERATOR] yoz:
 - KNOWLEDGE'da aniq javob yo'q
 - Foydalanuvchi "firibgar", "aldov", "ishonmayman" desa
 - Suhbat mavzusi umuman tushunarsiz bo'lsa
+- Sovrin/natija kechikishi haqida SHIKOYAT (norozi ohangda — oddiy "qachon beriladi" savolidan farqli)
+- Umumiy texnik muammo ("ulay olmayapman", "sozlay olmadim") — shu promptda yechimi bo'lmasa
 
 "Operatorga murojaat qiling" deb HECH QACHON yozma — faqat [OPERATOR].
 Telefon raqami (+998...) berib foydalanuvchini qo'yib yuborma — muammoni jonli xodim hal qilsin, shuning uchun [OPERATOR] yoz.
@@ -647,9 +744,30 @@ TO'G'RI: "@musofir_shou_bot ga kiring, 'Qo'shimcha ball yig'ish' tugmasini bosin
 NOTO'G'RI: "shaxsiy kabinetingizda" yoki "profilingizda" deb aytish.
 
 ═══════════════════════════════
+BOT ICHIDAGI QADAMLAR — TO'LIQ BILIM
+═══════════════════════════════
+@musofir_shou_bot quyidagicha ishlaydi:
+1. Avval ro'yxatdan o'tish kerak.
+2. Ro'yxatdan o'tgach quyidagi tugmalar chiqadi:
+   - "SHOU ID" kiritish — Bizmedia.uz mobil ilovasi orqali obuna sotib olganlar uchun maxsus ID. Foydalanuvchi "Bizmedia.uz ilovasidan sotib olganman" desa — ular qayta Telegram botida obuna sotib olmasligi kerak, shu tugma orqali SHOU ID'larini kiritishlari kifoya.
+   - "Obuna sotib olish" — 3 ta tarif (1/3/6 oylik) va ballari ko'rsatiladi, tanlab to'lov sahifasiga o'tiladi, u yerda karta ma'lumotlari kiritiladi.
+   - "Shaxsiy kabinet" — ishtirok holati, ballar, taklif qilingan do'stlar, ro'yxatdan o'tishda kiritilgan ma'lumotlar.
+   - "Qo'shimcha ball olish" — referal havola (yuqoridagi REFERAL HAVOLA bo'limi).
+   - "Biz bilan bog'lanish" — call-markaz raqami (+998-78-147-7889) va Telegram operator shu yerda. Bu — umumiy aloqa/navigatsiya savoliga javob, kerak bo'lganda bemalol bering. LEKIN to'lov muammosi, shikoyat yoki texnik nosozlik bo'lsa, bu raqamni yechim sifatida taklif qilmang — baribir [OPERATOR] yozing (pastdagi qoida).
+   - "Bizning ijtimoiy tarmoqlarimiz" — ijtimoiy tarmoq havolalari.
+
+Foydalanuvchi "qanday tanlayman", "keyin nima qilaman" kabi adashgan savol bersa — qadamlarni oddiy, qisqa tilda tushuntiring: "Botga kiring → 'Obuna sotib olish' tugmasini bosing → tarifni tanlang → to'lov sahifasida karta ma'lumotlaringizni kiriting → tayyor!"
+
+═══════════════════════════════
+OBUNA AVTOMATIK YANGILANISHI
+═══════════════════════════════
+Shouda ishtirok etish uchun obuna FAOL bo'lishi shart. Obuna avtomatik yangilanadi; muvaffaqiyatli yangilanganda foydalanuvchiga o'sha tarifga mos ball yana beriladi (masalan, 6 oylik obuna yangilansa — yana 100 ball). Buni birinchi marta narx/CTA aytganda ogohlantirish emas, FOYDA sifatida tabiiy qo'shing, masalan: "...Va yana bir qulaylik — obuna faol turar ekan, har safar muvaffaqiyatli yangilanganda sizga yana ball qo'shib boriladi, bu esa tanlanish imkoniyatingizni yanada oshiradi. Qaysi tarifni tanlaysiz?"
+Agar to'g'ridan-to'g'ri "avtomatik yechiladimi", "o'zi pul ketadimi" deb so'rashsa — halol javob bering: "Ha, obuna faol turishi uchun avtomatik yangilanadi va har safar yangi ball qo'shiladi. Agar xohlamasangiz, istalgan payt bekor qilishingiz mumkin — lekin obuna bekor qilinsa, yangi ishtirokchilar tanloviga kiritilmaysiz."
+
+═══════════════════════════════
 QUYIDAGILARNI FAQAT SO'RALGANDA AYT
 ═══════════════════════════════
-Efir jadvali (MY5, shanba 21:00), sovrinlar ro'yxati, o'yin mexanikasi (zinama-zina, super o'yin), obuna avtomatik yangilanishi — bu mavzularni o'zing ko'tarma. Faqat foydalanuvchi o'zi so'rasa, qisqacha ayt.
+Efir jadvali (MY5, shanba 21:00), sovrinlar ro'yxati, o'yin mexanikasi (zinama-zina, super o'yin) — bu mavzularni o'zing ko'tarma. Faqat foydalanuvchi o'zi so'rasa, qisqacha ayt.
 
 ═══════════════════════════════
 MISOLLAR
@@ -666,8 +784,16 @@ TO'G'RI: "Qatnashish uchun @musofir_shou_bot orqali obuna sotib olish kerak. U y
 NOTO'G'RI: Darhol "Qaysi mamlakatdasiz?" deb so'rash.
 
 Narx ko'rsatish (O'zbekiston misoli):
-TO'G'RI: "O'zbekiston uchun: 1 oylik 50 000 so'm (10 ball), 3 oylik 135 000 so'm (40 ball), 6 oylik 240 000 so'm (100 ball). Qaysi muddat qiziqtiradi?"
+TO'G'RI: "O'zbekiston uchun: 1 oylik 50 000 so'm (10 ball), 3 oylik oyiga hisoblasa 45 000 so'm chiqadi (40 ball), 6 oylik esa oyiga bor-yo'g'i 40 000 so'm (100 ball) — uzoqroq tanlasangiz, ham oylik narx pastroq, ham ball ko'proq yig'iladi. Qaysi muddat qiziqtiradi?"
 NOTO'G'RI: Har bir tarifni alohida qatorda yozish — ro'yxatga o'xshab qoladi. Hammasi bir qatorda, vergul bilan.
+
+Foydalanuvchi "qimmat ekan" desa:
+TO'G'RI: "Tushunaman. Bu aslida ikkita narsani birlashtiradi — ham ishtirok, ham bizmedia.uz kontentiga kirish, shuning uchun ko'pchilik buni ikkita imkoniyat sifatida ko'radi. Eng kichik, 1 oylik tarifdan ham boshlashingiz mumkin. Shu bilan boshlaymizmi?"
+NOTO'G'RI: Chegirma taklif qilish yoki "xo'p, o'ylab ko'ring" deb passiv qoldirish.
+
+Foydalanuvchi "o'ylab ko'raman" desa:
+TO'G'RI: "Albatta, shoshilmang! Faqat aytsangiz — narxmi yoki boshqa savolmi sizni ikkilantirayotgan narsa? Aniqlik kiritsam, tezroq qaror qilishingiz osonroq bo'ladi."
+NOTO'G'RI: "Xop, o'ylab ko'ring" deb yozib, suhbatni ochiq qoldirish.
 
 Tariflar farqi/qaysi biri yaxshi:
 TO'G'RI: "Asosiy farq — ball miqdori. 1 oylik 10 ball, 3 oylik 40 ball, 6 oylik 100 ball. Qancha ball ko'p bo'lsa, tanlanish ehtimoli shuncha baland. Ko'pchilik 6 oylikni tanlaydi — narxi ham tejamli."
@@ -723,6 +849,9 @@ export default {
     if (reqUrl.pathname === "/privacy") {
       return handlePrivacy();
     }
+    if (reqUrl.pathname === "/admin/unanswered") {
+      return handleUnansweredBacklog(reqUrl);
+    }
 
     if (request.method === "GET") {
       const url = new URL(request.url);
@@ -735,11 +864,11 @@ export default {
     return channels.telegram.handleWebhookUpdate(request);
   },
 
-  // Har kuni kechki 19:00 (O'zbekiston, UTC+5) = UTC 14:00 da ishga tushadi
-  // wrangler.toml: crons = ["0 14 * * *"]
+  // Har soatda ishga tushadi (narx-bosqichi follow-up aniq vaqt oynalarini ushlab qolishi uchun)
+  // wrangler.toml: crons = ["0 * * * *"]
   async scheduled(event, env, ctx) {
     applyRuntimeConfig(env);
-    ctx.waitUntil(sendFollowups());
+    ctx.waitUntil(sendPriceStageFollowups());
   },
 };
 
@@ -759,17 +888,22 @@ async function handleUserMessage(message) {
   // === DEBUG REJIMI ===
   // Faqat operator ishlatishi mumkin
   if (userText === "/testfollowup" && OPERATOR_CHAT_IDS.includes(chatId)) {
-    await sendTelegram(chatId, "⏳ Avtoxabar tekshirilmoqda...");
-    const candidates = await getFollowupCandidates();
-    if (candidates.length === 0) {
-      await sendTelegram(chatId, "ℹ️ Hozircha avtoxabar yuborish kerak bo'lgan foydalanuvchi yo'q.");
+    await sendTelegram(chatId, "⏳ Narx-bosqichi follow-up tekshirilmoqda...");
+    let result;
+    try {
+      result = await sendPriceStageFollowups();
+    } catch (e) {
+      await sendTelegram(chatId, `❌ RPC xatosi: ${e.message}`);
+      return;
+    }
+    if (result.skippedQuietHour) {
+      await sendTelegram(chatId, "🌙 Hozir Toshkentda tinch soat (23:00-09:00) — eslatmalar keyingi tikda tekshiriladi.");
+    } else if (result.sent.length === 0) {
+      await sendTelegram(chatId, "ℹ️ Hozircha eslatma yuborish kerak bo'lgan foydalanuvchi yo'q.");
     } else {
-      let report = `📤 ${candidates.length} ta foydalanuvchiga xabar yuborildi:\n\n`;
-      for (const { chat_id, followup_count } of candidates) {
-        const msg = await generateFollowupMessage(chat_id, followup_count);
-        await sendTelegram(chat_id, msg);
-        await saveMessage(chat_id, "assistant", `[avtoxabar-${followup_count + 1}]: ${msg}`);
-        report += `👤 ID: ${chat_id} → ${followup_count + 1}-xabar\n"${msg}"\n\n`;
+      let report = `📤 ${result.sent.length} ta foydalanuvchiga eslatma yuborildi:\n\n`;
+      for (const { chatId: id, reminderIndex, ok, error, text } of result.sent) {
+        report += `👤 ID: ${id} → ${reminderIndex + 1}-eslatma ${ok ? "✅" : `❌ (${error})`}\n"${text}"\n\n`;
       }
       await sendTelegram(chatId, report);
     }
@@ -1807,7 +1941,7 @@ async function closeOperatorSession(userChatId, closingMsg, bizConnId, platform 
         apikey: SUPABASE_KEY,
         Authorization: `Bearer ${SUPABASE_KEY}`,
       },
-      body: JSON.stringify({ status: "closed", updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ status: "closed" }),
     }
   );
 
@@ -1925,7 +2059,7 @@ async function handleOperatorReply(message) {
       apikey: SUPABASE_KEY,
       Authorization: `Bearer ${SUPABASE_KEY}`,
     },
-    body: JSON.stringify({ answer: operatorAnswer, status: "active", updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ answer: operatorAnswer, status: "active" }),
   });
 
   if (delivery.ok) {
@@ -1944,111 +2078,264 @@ async function handleOperatorReply(message) {
 
 // ============================================================
 // ============================================================
-// AVTOXABAR — jim qolgan foydalanuvchilarga re-engagement
+// NARX-BOSQICHI FOLLOW-UP — narx/tarif aytilgandan keyin javob kelmagan lidlarga eslatma
 // ============================================================
-async function sendFollowups() {
-  const all = await getFollowupCandidates();
-  const candidates = all.slice(0, 50); // Har kuni maksimal 50 ta
+function isQuietHourNowTashkent() {
+  const tashkentHour = new Date(Date.now() + TASHKENT_OFFSET_MS).getUTCHours();
+  return tashkentHour >= QUIET_HOUR_START || tashkentHour < QUIET_HOUR_END;
+}
+
+// Chatda saqlangan til maydoni yo'q — lidning o'z xabarlaridan sodda heuristika bilan
+// aniqlaymiz. Aniq bo'lmasa o'zbekcha deb hisoblanadi (spec: "aniq bo'lmasa — o'zbekcha").
+function detectLeadLanguage(history) {
+  const userText = history.filter((h) => h.role === "user").map((h) => h.content.toLowerCase()).join(" ");
+  const russianMarkers = ["привет", "здравствуйте", "спасибо", "пожалуйста", "хочу", "сколько", "оплат", "подписк", "вопрос"];
+  return russianMarkers.some((w) => userText.includes(w)) ? "ru" : "uz";
+}
+
+// operator_requests'da yozuv yo'q (hech qachon eskalatsiya bo'lmagan) lidlar uchun
+// zaxira aniqlash. Instagram IGSID juda uzun bo'ladi (worker_v2.js:2671 dagi izohga mos) —
+// Telegram ID'lar hozircha 10 xonadan oshmaydi.
+function guessPlatformFromChatId(chatId) {
+  return String(chatId).length >= 15 ? "instagram" : "telegram";
+}
+
+async function sendPriceStageFollowups() {
+  if (isQuietHourNowTashkent()) {
+    return { skippedQuietHour: true, sent: [] };
+  }
+
+  const candidates = await getPriceStageFollowupCandidates();
   const globalBizConn = await getSetting("biz_conn_id");
-  console.log(`Avtoxabar: ${all.length} kandidatdan ${candidates.length} ta qayta ishlanyapdi`);
-  for (const { chat_id, followup_count } of candidates) {
+  const sent = [];
+
+  for (const { chat_id: chatId, platform, waiting_reply_since, reminder_count } of candidates) {
+    const reminderIndex = Number(reminder_count) || 0; // 0 → 1-eslatma navbatda, 1 → 2-eslatma
+    if (reminderIndex >= 2) continue;
+
+    const elapsedHours = (Date.now() - new Date(waiting_reply_since).getTime()) / 3600_000;
+    const minHours = reminderIndex === 0 ? REMINDER_1_MIN_HOURS : REMINDER_2_MIN_HOURS;
+    if (elapsedHours < minHours) continue;
+
     try {
-      const msg = await generateFollowupMessage(chat_id, followup_count);
-      if (!msg) continue;
-      await sendTelegram(chat_id, msg, globalBizConn);
-      await saveMessage(chat_id, "assistant", `[avtoxabar-${followup_count + 1}]: ${msg}`);
+      const history = await getHistory(chatId);
+      const allContent = history.map((h) => h.content.toLowerCase()).join(" ");
+      if (PURCHASE_CONFIRMED_PHRASES.some((p) => allContent.includes(p))) continue;
+      if (OPTED_OUT_PHRASES.some((p) => allContent.includes(p))) continue;
+
+      const lang = detectLeadLanguage(history);
+      const text = REMINDER_TEXTS[lang][reminderIndex];
+
+      const resolvedPlatform = platform || guessPlatformFromChatId(chatId);
+      const delivery = await deliverToUserByPlatform(resolvedPlatform, chatId, text, globalBizConn);
+
+      // Faqat MUVAFFAQIYATLI yetkazilgan eslatma "yuborildi" deb hisoblanadi — aks holda
+      // keyingi soatlik tikda qayta urinish imkoniyati abadiy yo'qolib qoladi
+      // (reminder_count muvaffaqiyatsiz urinishni ham sanab qo'yardi — shu tuzatildi).
+      if (delivery?.ok) {
+        await saveMessage(chatId, "assistant", `[avtoxabar-${reminderIndex + 1}]: ${text}`);
+      }
+      sent.push({ chatId, reminderIndex, text, ok: !!delivery?.ok, error: delivery?.ok ? undefined : delivery?.error });
     } catch (e) {
-      console.error(`Avtoxabar xatosi (${chat_id}):`, e.message);
+      sent.push({ chatId, reminderIndex, text: "", ok: false, error: e.message });
+      console.error(`Narx-bosqichi follow-up xatosi (${chatId}):`, e.message);
     }
   }
+
+  return { skippedQuietHour: false, sent };
 }
 
-async function generateFollowupMessage(chatId, followupCount) {
-  const history = await getHistory(chatId);
-
-  // Oxirgi 10 xabarni ko'rish
-  const recent = history
-    .slice(-10)
-    .filter((h) => !h.content.startsWith("["))
-    .map((h) => `${h.role === "user" ? "Foydalanuvchi" : "Operator"}: ${h.content}`)
-    .join("\n");
-
-  if (!recent) return FOLLOWUP_FALLBACK;
-
-  // Obuna sotib olganlar uchun xabar yubormaslik
-  const allContent = history.map(h => h.content.toLowerCase()).join(" ");
-  const purchasedPhrases = [
-    // User tomonidan
-    "to'lov qildim", "tolov qildim", "obuna oldim", "sotib oldim",
-    "pul o'tkazdim", "to'ladim", "toladim", "obuna bo'ldim", "obuna boldim",
-    // Operator/bot tomonidan tasdiqlangan
-    "tabriklayman", "tabriklaymiz", "tabrik",
-    "ishtirokchi sifatida tanlanibsiz", "ishtirokchi bo'ldingiz",
-    "ishtirokchi sifatida tanlanish imkoniyatini qo'lga kiritdingiz",
-    "obuna faollashtirildi", "obuna muvaffaqiyatli",
-    "siz ishtirokchi", "ishtirokchisiz",
-  ];
-  if (purchasedPhrases.some(p => allContent.includes(p))) return null;
-
-  const prompt = `Quyida foydalanuvchi bilan bo'lgan oxirgi suhbat:
-
-${recent}
-
-Vazifang:
-1. Suhbatdan foydalanuvchi qaysi bosqichda ekanini aniqla:
-   - A: Hali ma'lumot olish bosqichida (shou haqida bilmaydi)
-   - B: Qiziqyapti, lekin ro'yxatdan o'tmagan
-   - C: Ro'yxatdan o'tgan, lekin to'lov qilmagan
-
-2. Shu bosqichga mos BITTA qisqa xabar yoz (1-2 jumla):
-   - A bosqich: Shou haqida qiziqtiruvchi biror narsa ayt
-   - B bosqich: @musofir_shou_bot ga o'tishga tabiiy undash
-   - C bosqich: To'lovni yakunlashga tabiiy undash yoki muammo bormi deb so'ra
-
-Bosim o'tkazma. Tabiiy, qisqa, do'stona yoz.`;
-
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL_LIGHT,
-      max_tokens: 120,
-      temperature: 0.7,
-      system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  const data = await r.json();
-  const text = data.content?.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
-  return text || (FOLLOWUP_MESSAGES[followupCount] ?? FOLLOWUP_MESSAGES[FOLLOWUP_MESSAGES.length - 1]);
-}
-
-async function getFollowupCandidates() {
-  const cutoffRecent = new Date(Date.now() - FOLLOWUP_DELAY_HOURS * 3600_000).toISOString();
-  const cutoffOld = new Date(Date.now() - FOLLOWUP_WINDOW_HOURS * 3600_000).toISOString();
-
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_followup_candidates`, {
+async function getPriceStageFollowupCandidates() {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_price_stage_followup_candidates`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       apikey: SUPABASE_KEY,
       Authorization: `Bearer ${SUPABASE_KEY}`,
     },
-    body: JSON.stringify({
-      cutoff_recent: cutoffRecent,
-      cutoff_old: cutoffOld,
-      max_followups: FOLLOWUP_MAX_COUNT,
-      operator_id: OPERATOR_CHAT_ID,
-    }),
+    body: JSON.stringify({ operator_id: OPERATOR_CHAT_ID }),
   });
 
   const data = await r.json();
+  if (!r.ok) {
+    console.error("get_price_stage_followup_candidates RPC xatosi:", r.status, JSON.stringify(data));
+    throw new Error(`RPC xatosi (${r.status}): ${data?.message || JSON.stringify(data)}`);
+  }
   return Array.isArray(data) ? data : [];
+}
+
+// ============================================================
+// KECHA JAVOBSIZ QOLGAN XABARLAR — bir martalik tozalash vazifasi
+// ============================================================
+// Oxirgi xabari "user" bo'lib qolgan (hali botdan ham, operatordan ham javob
+// kelmagan) va shu xabar kecha (Toshkent kalendar kuni) yozilgan foydalanuvchilarni
+// topadi. Har birining ketma-ket javobsiz xabarlarini birlashtirib BITTA javob beradi.
+function stripMediaPlaceholderLines(text) {
+  return (text || "")
+    .split("\n")
+    .filter((line) => {
+      const stripped = line.trim().replace(/^[^\[\]a-zA-Z0-9']+/, "").trim();
+      return !/^\[.*\]$/.test(stripped); // "📷 [Rasm/Skrinshot yuborildi]" kabi markerlar
+    })
+    .join("\n")
+    .trim();
+}
+
+// Bitta so'rovda: kecha yozgan, hali javobsiz qolgan barcha foydalanuvchilarni topadi
+// (operator sessiyasi ochiq bo'lmaganlarni). Har bir chat_id uchun kamida 2 ta emas,
+// jami 3 ta Supabase so'rovi ishlatiladi — Worker subrequest limitiga urilib qolmaslik uchun.
+async function findUnansweredYesterday() {
+  const TASHKENT_OFFSET_MS = 5 * 3600_000;
+  const nowTashkent = new Date(Date.now() + TASHKENT_OFFSET_MS);
+  const todayMidnightUTCms =
+    Date.UTC(nowTashkent.getUTCFullYear(), nowTashkent.getUTCMonth(), nowTashkent.getUTCDate()) - TASHKENT_OFFSET_MS;
+  const yesterdayStart = new Date(todayMidnightUTCms - 24 * 3600_000).toISOString();
+  const yesterdayEnd = new Date(todayMidnightUTCms).toISOString();
+
+  const candR = await fetch(
+    `${SUPABASE_URL}/rest/v1/conversations?role=eq.user&created_at=gte.${yesterdayStart}&created_at=lt.${yesterdayEnd}&select=chat_id`,
+    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+  );
+  const candRows = await candR.json();
+  const chatIds = Array.isArray(candRows)
+    ? [...new Set(candRows.map((row) => row.chat_id))].filter((id) => !OPERATOR_CHAT_IDS.includes(id))
+    : [];
+  if (chatIds.length === 0) return [];
+  const idList = chatIds.join(",");
+
+  // Platforma (telegram/instagram/whatsapp/max) va "operator hozir band qilib
+  // turibdimi" (status pending/active — muddatidan qat'iy nazar) shu yerdan aniqlanadi.
+  const opR = await fetch(
+    `${SUPABASE_URL}/rest/v1/operator_requests?user_chat_id=in.(${idList})&select=user_chat_id,platform,status,created_at&order=user_chat_id.asc,created_at.desc`,
+    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+  );
+  const opRows = await opR.json();
+  const platformByChat = new Map();
+  const busyIds = new Set();
+  if (Array.isArray(opRows)) {
+    for (const row of opRows) {
+      if (!platformByChat.has(row.user_chat_id)) platformByChat.set(row.user_chat_id, row.platform || "telegram");
+      if (row.status === "pending" || row.status === "active") busyIds.add(row.user_chat_id);
+    }
+  }
+
+  const histR = await fetch(
+    `${SUPABASE_URL}/rest/v1/conversations?chat_id=in.(${idList})&select=chat_id,role,content,created_at&order=chat_id.asc,created_at.desc&limit=5000`,
+    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+  );
+  const histRows = await histR.json();
+  if (!Array.isArray(histRows)) return [];
+
+  const byChat = new Map();
+  for (const row of histRows) {
+    if (!byChat.has(row.chat_id)) byChat.set(row.chat_id, []);
+    const arr = byChat.get(row.chat_id);
+    if (arr.length < HISTORY_LIMIT) arr.push(row); // desc tartibda kelyapti — faqat oxirgi HISTORY_LIMIT kerak
+  }
+
+  const candidates = [];
+  for (const chatId of chatIds) {
+    if (busyIds.has(chatId)) continue; // operator hozir band qilib turibdi
+
+    const descRows = byChat.get(chatId);
+    if (!descRows || descRows.length === 0) continue;
+    const filtered = descRows.filter((row) => !isLegacyBotMessage(row.content) && !isServiceMessage(row.content));
+    if (filtered.length === 0) continue;
+    const history = filtered.slice().reverse(); // asc
+
+    const last = history[history.length - 1];
+    if (last.role !== "user") continue; // allaqachon javob berilgan
+
+    const { priorHistory, combinedUserText } = splitPendingUserBatch(history, last.content);
+    const meaningfulText = stripMediaPlaceholderLines(combinedUserText);
+    if (!meaningfulText) continue; // faqat rasm/fayl/ovoz markeri — operator kerak
+
+    const platform = platformByChat.get(chatId) || "telegram";
+    candidates.push({ chatId, platform, priorHistory, combinedUserText: meaningfulText });
+  }
+
+  return candidates;
+}
+
+async function answerUnansweredYesterday(commit, limit) {
+  const candidates = await findUnansweredYesterday();
+  const toProcess = commit && limit ? candidates.slice(0, limit) : candidates;
+  const results = [];
+
+  for (const prepared of toProcess) {
+    const chatId = prepared.chatId;
+    const platform = prepared.platform;
+
+    if (!commit) {
+      results.push({ chatId, platform, pending: true, preview: prepared.combinedUserText.slice(0, 300) });
+      continue;
+    }
+
+    try {
+      const { reply } = await runUnifiedBrainRequest({
+        channel: platform,
+        userText: prepared.combinedUserText,
+        history: prepared.priorHistory,
+      });
+
+      if (isCreditErrorReply(reply)) {
+        results.push({ chatId, platform, ok: false, error: "credit" });
+        continue;
+      }
+      if (isLanguageRefusal(reply)) {
+        results.push({ chatId, platform, ok: false, error: "language-refusal" });
+        continue;
+      }
+      if (reply.trim() === "[OPERATOR]" || reply.includes("[OPERATOR]")) {
+        results.push({ chatId, platform, ok: false, error: "operator-needed" });
+        continue;
+      }
+
+      let cleanReply = removeOperatorPhrase(reply);
+      if (prepared.priorHistory.some((h) => h.role === "assistant")) {
+        cleanReply = stripLeadingGreeting(cleanReply);
+      }
+      await saveMessage(chatId, "assistant", cleanReply);
+      const delivery = await deliverToUserByPlatform(platform, chatId, cleanReply);
+      results.push({ chatId, platform, ok: !!delivery?.ok, error: delivery?.ok ? undefined : delivery?.error });
+    } catch (e) {
+      results.push({ chatId, platform, ok: false, error: e.message });
+    }
+  }
+
+  return results;
+}
+
+async function handleUnansweredBacklog(reqUrl) {
+  if (reqUrl.searchParams.get("key") !== DASHBOARD_KEY) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  if (reqUrl.searchParams.get("statusCheck") === "1") {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/operator_requests?status=in.(active,closed,answered,cancelled)&select=id,status&limit=5`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    const rows = await r.json();
+    return new Response(JSON.stringify({ ok: true, httpStatus: r.status, rows }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  const opRowsOf = reqUrl.searchParams.get("opRowsOf");
+  if (opRowsOf) {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/operator_requests?user_chat_id=eq.${opRowsOf}&select=*&order=created_at.desc&limit=20`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    const rows = await r.json();
+    return new Response(JSON.stringify({ ok: true, httpStatus: r.status, rows }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  const commit = reqUrl.searchParams.get("commit") === "1";
+  // Bir chaqiriqda subrequest limitiga urilib qolmaslik uchun commit rejimida
+  // standart bo'lib bir nechta foydalanuvchi qayta ishlanadi (kerak bo'lsa qayta chaqiriladi).
+  const limit = Number(reqUrl.searchParams.get("limit") || 8);
+  const results = await answerUnansweredYesterday(commit, limit);
+  return new Response(JSON.stringify({ ok: true, commit, limit: commit ? limit : undefined, count: results.length, results }, null, 2), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 // ============================================================
@@ -2599,8 +2886,10 @@ async function handleInstagramComment(value, igAccountId) {
 
   if (!contentful) {
     // Emoji-only / bo'sh izoh — DM faqat tarix bo'lmasa yuboriladi.
-    publicMsg = IG_COMMENT_PUBLIC_INVITE;
-    dmMsg = IG_COMMENT_DM_INVITE;
+    // Og'ir/hissiy emoji (😢💔 kabi) kelsa — quvnoq taklif emas, iliq va hurmatli ohang.
+    const isSadEmoji = IG_SAD_EMOJI_REGEX.test(text);
+    publicMsg = isSadEmoji ? pickRandom(IG_COMMENT_PUBLIC_WARM_VARIANTS) : pickRandom(IG_COMMENT_PUBLIC_VARIANTS);
+    dmMsg = isSadEmoji ? IG_COMMENT_DM_WARM : IG_COMMENT_DM_INVITE;
     const existingHistory = await getHistory(commenterId);
     shouldSendDm = existingHistory.length === 0;
     await saveMessage(commenterId, "user", `[Instagram izoh]: ${text || "(emoji)"}`);
@@ -2637,7 +2926,7 @@ async function handleInstagramComment(value, igAccountId) {
       if (history.some((h) => h.role === "assistant")) dmMsg = stripLeadingGreeting(dmMsg);
       await saveMessage(commenterId, "user", `[Instagram izoh]: ${text}`);
       await saveMessage(commenterId, "assistant", dmMsg);
-      publicMsg = IG_COMMENT_PUBLIC_REPLY;
+      publicMsg = pickRandom(IG_COMMENT_PUBLIC_VARIANTS);
     }
   }
 
