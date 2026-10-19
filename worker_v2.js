@@ -618,7 +618,7 @@ QISQA VA NOANIQ XABARLAR — MUHIM QOIDA
 "oldim", "bo'ldi", "ha", "xo'sh", "keyin nima", "nima qilaman" kabi qisqa yoki ko'p ma'noli xabarlar kelsa:
 
 1. Avval suhbat tarixini ko'r — 100% aniq bo'lsa, o'sha kontekstda javob ber.
-2. Agar noaniq bo'lsa — bir aniqlovchi savol ber. Misol: "'Oldim' deganda obuna sotib oldingizmi yoki boshqa narsa haqida gapirmoqchisizmi?"
+2. Agar noaniq bo'lsa — bir aniqlovchi savol ber, foydalanuvchi so'zlarini takrorlamasdan. Misol: "Obuna sotib oldingizmi yoki boshqa narsa haqida gapiryapsizmi?"
 3. Aniqlovchi savolga ham tushunarli javob kelmasa — [OPERATOR] yoz.
 
 Javob yozishdan OLDIN o'zingga so'ra: "Men bu xabarning nima ekanligini 100% bilaman?" — Yo'q bo'lsa, aniqlat. Taxmin qilib javob berma.
@@ -709,11 +709,11 @@ DIQQAT — "SUPER O'YIN" ikki ma'noda ishlatiladi, kontekstga qarab ajrat:
 MUOMALA & TAQIQLAR — BUZILMAYDI
 ═══════════════════════════════
 Muomala:
-- Avval foydalanuvchining savoli yoki e'tirofini tushunganingni bildir, keyin tushuntir.
+- Foydalanuvchining savolini yoki so'zlarini HECH QACHON qaytarib yozma va iqtibos keltirma ("... deganda", "Siz ... deb so'radingiz" kabi). Javobni to'g'ridan-to'g'ri mazmundan boshla. Norozilik bo'lsa — bir og'iz hamdardlik ("Tushunaman") yetarli.
 - Javoblar qisqa, aniq, xushmuomala bo'lsin. Foydalanuvchi norozi bo'lsa — bahslashma.
 - "Siz noto'g'ri tushunyapsiz", "siz haq emassiz", "siz tushunmayapsiz" kabi iboralarni HECH QACHON ishlatma.
-- Foydalanuvchi to'lov o'tmayapti, karta qabul qilinmayapti, "bo'lmayapti" yoki texnik muammo aytsa — telefon raqami BERMA, o'zing hal qilishga urinma: qisqa tushunganingni bildir va [OPERATOR] yoz. Jonli xodim ulanadi.
-- Foydalanuvchi jahllansa yoki haqorat qilsa — tortishma. Bir og'iz tinchlantir va [OPERATOR] yoz (jonli xodim hal qiladi). Telefon raqami yozib qo'yib yuborma.
+- Foydalanuvchi to'lov o'tmayapti, karta qabul qilinmayapti, "bo'lmayapti" yoki texnik muammo aytsa — telefon raqami BERMA, o'zing hal qilishga urinma: javob o'rniga faqat [OPERATOR] yoz. "Jonli xodim yordam beradi" kabi matnni o'zing yozma — buni tizim o'zi hal qiladi.
+- Foydalanuvchi jahllansa yoki haqorat qilsa — tortishma, javob o'rniga faqat [OPERATOR] yoz (jonli xodim hal qiladi). Telefon raqami yozib qo'yib yuborma.
 
 HECH QACHON qilma (TAQIQ):
 - Pul qaytarib beriladi deb va'da BERMA.
@@ -1341,18 +1341,22 @@ function stripLeadingQuestionEcho(reply, userText) {
   const question = (userText || "").trim();
   if (!text || !question) return text;
 
-  const escaped = question.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const patterns = [
-    new RegExp(`^${escaped}[\s:,-]*`, "i"),
-    new RegExp(`^(?:javob\s*:)\s*${escaped}[\s:,-]*`, "i"),
-  ];
+  // Debounce bir nechta xabarni "\n" bilan birlashtiradi — model to'liq matnni ham,
+  // alohida qatorni ham qaytarib yozishi mumkin. Avval uzunrog'ini tekshiramiz.
+  const candidates = [question, ...question.split("\n")]
+    .map((q) => q.trim())
+    .filter((q) => q.length >= 8) // "Rahmat", "Xop" kabi qisqa so'zlarni olib tashlamaymiz
+    .sort((a, b) => b.length - a.length);
 
   let cleaned = text;
-  for (const pattern of patterns) {
-    cleaned = cleaned.replace(pattern, "").trim();
+  for (const q of candidates) {
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(String.raw`^(?:javob\s*:\s*)?["«]?${escaped}["»]?[\s:,.?!—-]*`, "i");
+    const next = cleaned.replace(pattern, "").trim();
+    if (next !== cleaned) { cleaned = next; break; }
   }
-
-  return cleaned || text;
+  if (!cleaned) return text;
+  return cleaned === text ? text : cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
 
 function extractMigrationLinks(html, baseUrl) {
@@ -1610,23 +1614,49 @@ async function askClaude(userMessage, history, ragChunks, options = {}) {
 
   let finalText = text || "[OPERATOR]";
 
+  // [OPERATOR] belgisi yoki "jonli xodim yordam beradi" kabi topshirish iborasi bo'lsa —
+  // qayta yozishdan OLDIN qaytaramiz: aks holda rewriter belgini tushirib qoldiradi va
+  // foydalanuvchiga "jonli xodim" deb yoziladi, operator esa xabar olmaydi.
+  if (finalText.includes("[OPERATOR]") || (usageChannel !== "webapp" && isHandoffReply(finalText))) {
+    return "[OPERATOR]";
+  }
+
   // Safety net: agar model arab yozuvida javob qaytarsa, lotinga qayta yozdiramiz.
-  if (containsArabicScript(finalText) && finalText !== "[OPERATOR]") {
+  if (containsArabicScript(finalText)) {
     const rewritten = await rewriteToUzbekLatin(finalText, userMessage, { channel: usageChannel, phase: "rewrite" });
     if (rewritten) finalText = rewritten;
   }
 
-  // Qat'iy qoida: javob faqat o'zbek tilida bo'lsin (enforceUzbek=false bo'lsa o'tkazib yuboriladi).
-  if (enforceUzbek && finalText !== "[OPERATOR]") {
+  // Til nazorati: faqat foydalanuvchi lotinda yozib, model kirill/ruschaga og'ib ketganda.
+  // Har javobga qo'shimcha so'rov yubormaymiz — bu ham xarajat, ham savolni qaytarib
+  // yozish (echo) manbai edi. Kirill/rus tilida yozganlarga prompt bo'yicha o'z tilida javob.
+  if (enforceUzbek && needsUzbekEnforcement(finalText, userMessage)) {
     const uzbekOnly = await enforceUzbekOnly(finalText, userMessage, { channel: usageChannel, phase: "enforce_uz" });
     if (uzbekOnly) finalText = uzbekOnly;
   }
 
-  return finalText || "[OPERATOR]";
+  if (finalText.includes("[OPERATOR]")) return "[OPERATOR]";
+  return stripLeadingQuestionEcho(finalText, userMessage) || "[OPERATOR]";
 }
 
 function containsArabicScript(text) {
   return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(text || "");
+}
+
+function containsCyrillic(text) {
+  return /[\u0400-\u04FF]/.test(text || "");
+}
+
+// Foydalanuvchi lotinda yozgan-u, javob kirill (ko'pincha rus tili) bo'lib ketgan holat.
+function needsUzbekEnforcement(reply, userMessage) {
+  return containsCyrillic(reply) && !containsCyrillic(userMessage);
+}
+
+// Model [OPERATOR] o'rniga "jonli xodim yordam beradi" deb yozib qo'ygan holat:
+// bunday javob foydalanuvchiga yuborilmaydi \u2014 operatorga yo'naltiriladi.
+function isHandoffReply(text) {
+  const t = (text || "").toLowerCase().replace(/[\u2019\u2018`\u02BB\u02BC]/g, "'");
+  return /(jonli|mas'ul)\s+xodim(imiz|lar(imiz)?)?\s+(sizga\s+)?(yordam\s+beradi|hal\s+qil|ulanadi|bog'lanadi|javob\s+beradi)/.test(t);
 }
 
 function isLanguageRefusal(text) {
@@ -1650,7 +1680,8 @@ function removeOperatorPhrase(text) {
     .replace(/__(.+?)__/g, "$1")                    // __qalin__ → qalin
     .replace(/\*\*/g, "")                           // qolgan yakka **
     .replace(/`{1,3}/g, "")                         // kod belgilari `
-    .replace(/\s{2,}/g, " ")
+    .replace(/[ \t]{2,}/g, " ")                     // ortiqcha bo'shliq (qator ajratish saqlanadi)
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -1935,7 +1966,8 @@ async function escalateToOperator(chatId, userText, message, options = {}) {
   if (notifyUser) {
     await sendTelegram(
       chatId,
-      "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!"
+      "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!",
+      message.business_connection_id || null
     );
   }
 }
@@ -2757,14 +2789,15 @@ async function handleInstagramWebhook(request, url, ctx) {
     const entries = body.entry || [];
     const work = (async () => {
       for (const entry of entries) {
-        // DM (shaxsiy xabar) hodisalari
-        for (const ev of entry.messaging || []) {
+        // DM (shaxsiy xabar) hodisalari — parallel: bitta webhook'da kelgan ketma-ket
+        // xabarlar debounce orqali bitta javobga birlashishi uchun.
+        await Promise.all((entry.messaging || []).map(async (ev) => {
           try {
             await handleInstagramMessage(ev);
           } catch (e) {
             console.error("Instagram ishlov xatosi:", e.message);
           }
-        }
+        }));
         // Izoh (comment) hodisalari — Meta panelida "comments" field obuna qilingan bo'lishi kerak
         console.log("IG entry.changes:", JSON.stringify(entry.changes || []));
         for (const change of entry.changes || []) {
@@ -2828,6 +2861,13 @@ async function handleInstagramMessage(ev) {
     return;
   }
 
+  // Faqat emoji/tinish belgisi (story'ga 🔥 javobi, "👍" va h.k.) — bot indamaydi,
+  // operatorga ham yubormaydi.
+  if (!isContentfulComment(userText)) {
+    await saveMessage(chatId, "user", "[Instagram emoji yuborildi]");
+    return;
+  }
+
   await saveMessage(chatId, "user", userText);
 
   if (await hasActiveOperatorSession(chatId)) {
@@ -2835,21 +2875,32 @@ async function handleInstagramMessage(ev) {
     return;
   }
 
-  const history = await getHistory(chatId);
+  // === DEBOUNCE — Telegram'dagi kabi: ketma-ket xabarlarga BITTA javob ===
+  const debounceKey = `dbnc_${chatId}`;
+  const myMsgId = String(ev.message.mid || Date.now());
+  await saveSetting(debounceKey, myMsgId);
+  await sleep(DEBOUNCE_MS);
+  const latestMsgId = await getSetting(debounceKey);
+  if (latestMsgId && latestMsgId !== myMsgId) return;
+
+  const fullHistory = await getHistory(chatId);
+  const { priorHistory: history, combinedUserText: pendingText } = splitPendingUserBatch(fullHistory, userText);
+  // Emoji/reels/media markerlari ("[...]") Claude'ga matn sifatida bormasin.
+  const combinedUserText = stripMediaPlaceholderLines(pendingText) || userText;
   const { reply } = await runUnifiedBrainRequest({
     channel: "instagram",
-    userText,
+    userText: combinedUserText,
     history,
   });
 
   if (isCreditErrorReply(reply)) {
-    await escalateInstagramToOperator(chatId, `[CLAUDE CREDIT] ${userText}`, { notifyUser: false });
+    await escalateInstagramToOperator(chatId, `[CLAUDE CREDIT] ${combinedUserText}`);
     await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi: credit]");
     return;
   }
 
   if (isLanguageRefusal(reply) || reply.includes("[OPERATOR]")) {
-    await escalateInstagramToOperator(chatId, userText);
+    await escalateInstagramToOperator(chatId, combinedUserText);
     await saveMessage(chatId, "assistant", "[Operatorga yo'naltirildi]");
     return;
   }
@@ -2887,7 +2938,14 @@ async function handleInstagramComment(value, igAccountId) {
   if (alreadyDone) return;
   await saveSetting(dedupeKey, "1");
 
-  const contentful = isContentfulComment(text);
+  // Faqat boshqa foydalanuvchini belgilash (@do'st) — bu bizga savol emas, javob bermaymiz.
+  const textWithoutMentions = text.replace(/@[\w.]+/g, "").trim();
+  if (/@[\w.]+/.test(text) && !isContentfulComment(textWithoutMentions)) {
+    console.log("IG izoh: faqat @mention, skip");
+    return;
+  }
+
+  const contentful = isContentfulComment(textWithoutMentions);
 
   let publicMsg;
   let dmMsg;
@@ -2927,7 +2985,9 @@ async function handleInstagramComment(value, igAccountId) {
         await saveMessage(commenterId, "assistant", "[Operatorga yo'naltirildi: credit izoh]");
       } else {
         await escalateInstagramToOperator(commenterId, `[IZOH]: ${text}`, { notifyUser: false });
-        dmMsg = "⏳ Savolingiz mas'ul xodimga yuborildi. Tez orada javob beramiz!";
+        // DM oynasini ochish uchun bitta xabar kerak (operator keyin javob bera olishi uchun),
+        // lekin "mas'ul xodimga yuborildi" o'rniga tabiiy taklif.
+        dmMsg = IG_COMMENT_DM_INVITE;
         await saveMessage(commenterId, "assistant", "[Operatorga yo'naltirildi: izoh]");
       }
     } else {
@@ -3035,8 +3095,10 @@ async function sendInstagramCommentPrivateReply(commentId, text) {
   }
 }
 
+// Foydalanuvchiga "mas'ul xodimga yuborildi" xabari endi yuborilmaydi (robotga o'xshab
+// qolardi va emoji/qisqa javoblarga ham chiqardi) — kerak bo'lsa notifyUser: true bering.
 async function escalateInstagramToOperator(chatId, userText, options = {}) {
-  const { notifyUser = true } = options;
+  const { notifyUser = false } = options;
   const history = await getHistory(chatId);
   let historyText = "";
   if (history.length > 0) {
